@@ -5,7 +5,9 @@ import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
 import java.util
 
-import monix.reactive.Observable
+import fs2.Stream
+import fs2.io.file.Files
+import cats.effect.kernel.Async
 import scribe.LoggerSupport
 
 import scala.util.Try
@@ -44,26 +46,29 @@ object LowLevelMessage {
     new LowLevelMessage(headers, bytes)
   }
 
-  def fromInputStream(
+  def fromInputStream[F[_]: Async](
       in: InputStream,
       logger: LoggerSupport
-  ): Observable[LowLevelMessage] = {
+  ): Stream[F, LowLevelMessage] = {
     // FIXME: Use bracket to handle this resource correctly if something fails
-    fromBytes(Observable.fromInputStreamUnsafe(in), logger)
+    fromByteBuffers(
+      fs2.io.readInputStream[F](Async[F].pure(in), 4096).chunks.map(_.toByteBuffer),
+      logger
+    )
   }
 
-  def fromBytes(
-      in: Observable[Array[Byte]],
+  def fromBytes[F[_]: Async](
+      in: Stream[F, Array[Byte]],
       logger: LoggerSupport
-  ): Observable[LowLevelMessage] = {
+  ): Stream[F, LowLevelMessage] = {
     fromByteBuffers(in.map(ByteBuffer.wrap), logger)
   }
 
-  def fromByteBuffers(
-      in: Observable[ByteBuffer],
+  def fromByteBuffers[F[_]: Async](
+      in: Stream[F, ByteBuffer],
       logger: LoggerSupport
-  ): Observable[LowLevelMessage] = {
-    in.executeAsync.liftByOperator(LowLevelMessageReader.streamReader(logger))
+  ): Stream[F, LowLevelMessage] = {
+    in.through(LowLevelMessageReader.streamReader(logger))
   }
 
   def toMsg(message: LowLevelMessage): Message = {

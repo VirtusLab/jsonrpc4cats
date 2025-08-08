@@ -1,21 +1,25 @@
 package jsonrpc4s.tests
 
-import minitest.SimpleTestSuite
+import org.scalatest.matchers.should.Matchers
+import org.scalatest.wordspec.AnyWordSpec
 import jsonrpc4s.ErrorCode
 import com.github.plokhotnyuk.jsoniter_scala.core.{readFromArray, writeToArray, writeToString}
 import com.github.plokhotnyuk.jsoniter_scala.core.JsonValueCodec
 import com.github.plokhotnyuk.jsoniter_scala.macros.JsonCodecMaker
 import com.github.plokhotnyuk.jsoniter_scala.macros.CodecMakerConfig
 
-object ErrorCodeSuite extends SimpleTestSuite {
+class ErrorCodeSuite extends AnyWordSpec with Matchers {
 
   implicit val intCodec: JsonValueCodec[Int] = JsonCodecMaker.make(CodecMakerConfig)
+
   def check(code: Int, expected: ErrorCode): Unit = {
-    test(expected.toString) {
-      val obtained = readFromArray[ErrorCode](writeToArray(code))
-      assertEquals(obtained, expected)
-      val obtainedJson = writeToString(expected)
-      assertEquals(obtainedJson, code.toString)
+    expected.toString should {
+      "serialize and deserialize correctly" in {
+        val obtained = readFromArray[ErrorCode](writeToArray(code))
+        obtained shouldBe expected
+        val obtainedJson = writeToString(expected)
+        obtainedJson shouldBe code.toString
+      }
     }
   }
 

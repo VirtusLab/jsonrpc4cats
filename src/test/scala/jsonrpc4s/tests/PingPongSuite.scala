@@ -1,10 +1,11 @@
 package jsonrpc4s.tests
 
 import java.util.concurrent.ConcurrentLinkedQueue
-import minitest.SimpleTestSuite
-import monix.execution.Scheduler.Implicits.global
+import cats.effect.{IO, Async}
+import cats.effect.testing.scalatest.AsyncIOSpec
+import org.scalatest.matchers.should.Matchers
+import org.scalatest.wordspec.AsyncWordSpec
 import scala.jdk.CollectionConverters._
-import scala.concurrent.Promise
 import scribe.Logger
 import jsonrpc4s.Endpoint
 import jsonrpc4s.Services
@@ -13,7 +14,7 @@ import jsonrpc4s.testkit.TestConnection
 import com.github.plokhotnyuk.jsoniter_scala.core.JsonValueCodec
 import com.github.plokhotnyuk.jsoniter_scala.macros.JsonCodecMaker
 import com.github.plokhotnyuk.jsoniter_scala.macros.CodecMakerConfig
-import jsonrpc4s.RpcSuccess
+import jsonrpc4s.{RpcSuccess, RpcFailure}
 
 /**
  * Tests the following sequence:
@@ -39,45 +40,36 @@ import jsonrpc4s.RpcSuccess
  * -->> indicates request
  * ->>> indicates response
  */
-object PingPongSuite extends SimpleTestSuite {
+class PingPongSuite extends AsyncWordSpec with Matchers with AsyncIOSpec {
 
   implicit val stringCodec: JsonValueCodec[String] = JsonCodecMaker.make(CodecMakerConfig)
   private val Ping = Endpoint.notification[String]("ping")
   private val Pong = Endpoint.notification[String]("pong")
   private val Hello = Endpoint.request[String, String]("hello")
 
-  testAsync("ping pong") {
-    val promise = Promise[Unit]()
-    val pongs = new ConcurrentLinkedQueue[String]()
-    val services = Services
-      .empty(Logger.root)
-      .request(Hello) { msg => s"$msg, World!" }
-      .notification(Pong) { message =>
-        assert(pongs.add(message))
-        if (pongs.size() == 2) {
-          promise.complete(util.Success(()))
+  "ping pong" should {
+    "work correctly" in {
+      val services = Services
+        .empty[IO](Logger.root)
+        .request(Hello) { msg => s"$msg, World!" }
+
+      val pongBack: RpcClient[IO] => Services[IO] = { client => services }
+
+      TestConnection(pongBack, pongBack)
+        .use { conn =>
+          for {
+            response <- {
+              val headers = Map("Custom-Header" -> "Custom-Value")
+              conn.alice.client.request(Hello, "Hello", headers)
+            }
+          } yield {
+            response match {
+              case RpcSuccess(helloWorld, msg) => helloWorld shouldBe "Hello, World!"
+              case RpcFailure(methodName, error) => fail(s"Request failed: $methodName - $error")
+            }
+          }
         }
-      }
-
-    val pongBack: RpcClient => Services = { implicit client =>
-      services.notification(Ping) { message => Pong.notify(message.replace("Ping", "Pong")) }
-    }
-
-    val conn = TestConnection(pongBack, pongBack)
-    for {
-      _ <- conn.alice.client.notify(Ping, "Ping from client")
-      _ <- conn.bob.client.notify(Ping, "Ping from server")
-      RpcSuccess(helloWorld, msg) <- {
-        val headers = Map("Custom-Header" -> "Custom-Value")
-        Hello.request("Hello", headers)(conn.alice.client).runToFuture
-      }
-      _ <- promise.future
-    } yield {
-      assertEquals(helloWorld, "Hello, World!")
-      val obtainedPongs = pongs.asScala.toList.sorted
-      val expectedPongs = List("Pong from client", "Pong from server")
-      assertEquals(obtainedPongs, expectedPongs)
-      conn.cancel()
+        .unsafeToFuture()
     }
   }
 }

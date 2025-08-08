@@ -3,11 +3,8 @@ package jsonrpc4s
 import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
 import scala.collection.mutable.ArrayBuffer
-import scala.concurrent.Future
-import monix.execution.Ack
-import monix.execution.Scheduler
-import monix.reactive.Observable.Operator
-import monix.reactive.observers.Subscriber
+import fs2.{Pipe, Stream}
+import cats.effect.kernel.Async
 import scribe.LoggerSupport
 
 final class LowLevelMessageReader(logger: LoggerSupport) {
@@ -28,13 +25,13 @@ final class LowLevelMessageReader(logger: LoggerSupport) {
 
   import LowLevelMessageReader.ReadResult
   def readHeaders(data: ArrayBuffer[Byte]): ReadResult = {
-    if (data.size < 4) ReadResult(None, Ack.Continue)
+    if (data.size < 4) ReadResult(None, false)
     else {
       var i = 0
       while (i + 4 < data.size && !atDelimiter(i, data)) {
         i += 1
       }
-      if (!atDelimiter(i, data)) ReadResult(None, Ack.Continue)
+      if (!atDelimiter(i, data)) ReadResult(None, false)
       else {
         val bytes = new Array[Byte](i)
         data.copyToArray(bytes)
@@ -67,25 +64,25 @@ final class LowLevelMessageReader(logger: LoggerSupport) {
                 logger.error(
                   s"Expected Content-Length to be a number, obtained $n"
                 )
-                ReadResult(None, Ack.Continue)
+                ReadResult(None, false)
             }
           case _ =>
             logger.error(s"Missing Content-Length key in headers $pairs")
-            ReadResult(None, Ack.Continue)
+            ReadResult(None, false)
         }
       }
     }
   }
 
   def readContent(data: ArrayBuffer[Byte]): ReadResult = {
-    if (contentLength > data.size) ReadResult(None, Ack.Continue)
+    if (contentLength > data.size) ReadResult(None, false)
     else {
       val contentBytes = new Array[Byte](contentLength)
       data.copyToArray(contentBytes)
       data.remove(0, contentLength)
       contentLength = -1
       val msg = new LowLevelMessage(header, contentBytes)
-      ReadResult(Some(msg), Ack.Stop)
+      ReadResult(Some(msg), true)
     }
   }
 
@@ -103,52 +100,39 @@ object LowLevelMessageReader {
     val result = reader.readHeaders(data)
 
     // Guarantee that this reader invariant holds
-    assert(result.msg.isDefined && result.ack != Ack.Continue)
+    assert(result.msg.isDefined && result.complete)
     result.msg
   }
 
-  def streamReader(logger: LoggerSupport): Operator[ByteBuffer, LowLevelMessage] = {
-    new Operator[ByteBuffer, LowLevelMessage] {
-      def apply(
-          out: Subscriber[LowLevelMessage]
-      ): Subscriber[ByteBuffer] = {
-        new Subscriber[ByteBuffer] {
-          private[this] val data = ArrayBuffer.empty[Byte]
-          private[this] val reader = new LowLevelMessageReader(logger)
-          override implicit val scheduler: Scheduler = out.scheduler
-          override def onError(ex: Throwable): Unit = out.onError(ex)
-          override def onComplete(): Unit = {
-            out.onComplete()
-          }
-
-          override def onNext(elem: ByteBuffer): Future[Ack] = {
-            val array = new Array[Byte](elem.remaining())
-            elem.get(array)
-            data ++= array
-            def loopUntilBufferExhaustion(result: ReadResult): Future[Ack] = {
-              result.msg match {
-                case None => result.ack
-                case Some(msg) =>
-                  out.onNext(msg).flatMap {
-                    case Ack.Continue => loopUntilBufferExhaustion(reader.readHeaders(data))
-                    case Ack.Stop => Ack.Stop
-                  }
-              }
-            }
-
-            loopUntilBufferExhaustion(
-              if (reader.currentContentLength < 0) reader.readHeaders(data)
-              else reader.readContent(data)
-            )
-          }
-        }
+  def streamReader[F[_]: Async](logger: LoggerSupport): Pipe[F, ByteBuffer, LowLevelMessage] = {
+    def processBuffer(
+        data: ArrayBuffer[Byte],
+        reader: LowLevelMessageReader
+    ): Stream[F, LowLevelMessage] = {
+      val result =
+        if (reader.currentContentLength < 0) reader.readHeaders(data) else reader.readContent(data)
+      result.msg match {
+        case None => Stream.empty
+        case Some(msg) => Stream.emit(msg) ++ processBuffer(data, reader)
       }
+    }
+
+    _.fold((ArrayBuffer.empty[Byte], new LowLevelMessageReader(logger))) {
+      case ((data, reader), buf) =>
+        val newData = data.clone()
+        val array = new Array[Byte](buf.remaining())
+        buf.get(array)
+        newData ++= array
+        (newData, reader)
+    }.flatMap {
+      case (data, reader) =>
+        processBuffer(data, reader)
     }
   }
 
   private[LowLevelMessageReader] case class ReadResult(
       msg: Option[LowLevelMessage],
-      ack: Future[Ack]
+      complete: Boolean
   )
 
 }

@@ -6,11 +6,11 @@ import java.io.OutputStreamWriter
 import java.io.PrintWriter
 import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
-import scala.concurrent.Future
-import monix.execution.Ack
-import monix.reactive.Observer
+import cats.effect.kernel.Async
+import fs2.concurrent.Channel
 import scribe.LoggerSupport
 import java.nio.channels.WritableByteChannel
+import cats.syntax.all._
 
 /**
  * A trait that writes JSON-RPC messages to an output stream.
@@ -41,46 +41,50 @@ final class LowLevelChannelMessageWriter(
     channel: WritableByteChannel,
     logger: LoggerSupport
 ) extends LowLevelMessageWriter {
-  def write(msg: Message): Future[Ack] = {
+  def write[F[_]: Async](msg: Message): F[Unit] = {
     val protocolMsg = LowLevelMessage.fromMsg(msg)
-    logger.trace(
-      s"""
-         |  --> header: ${protocolMsg.header.mkString(", ")}
-         |  --> content: ${new String(protocolMsg.content, StandardCharsets.UTF_8)}
-       """.stripMargin
-    )
+    Async[F].delay {
+      logger.trace(
+        s"""
+           |  --> header: ${protocolMsg.header.mkString(", ")}
+           |  --> content: ${new String(protocolMsg.content, StandardCharsets.UTF_8)}
+         """.stripMargin
+      )
 
-    val buf = baos.synchronized {
-      baos.reset()
-      LowLevelMessageWriter.writeToByteBuffer(protocolMsg, baos, headerOut)
+      val buf = baos.synchronized {
+        baos.reset()
+        LowLevelMessageWriter.writeToByteBuffer(protocolMsg, baos, headerOut)
+      }
+
+      channel.synchronized { channel.write(buf) }
     }
-
-    channel.synchronized { channel.write(buf) }
-    Ack.Continue
   }
 }
 
 /**
  * @inheritdoc
  *
- * @param out is an byte buffer observer where the writer writes the messages.
+ * @param out is an byte buffer channel where the writer writes the messages.
  * @param logger is a logger where we trace messages if level allows.
  */
-final class LowLevelByteBufferMessageWriter(
-    out: Observer[ByteBuffer],
+final class LowLevelByteBufferMessageWriter[F[_]: Async](
+    out: Channel[F, ByteBuffer],
     logger: LoggerSupport
 ) extends LowLevelMessageWriter {
-  def write(msg: Message): Future[Ack] = {
+  def write(msg: Message): F[Unit] = {
     val protocolMsg = LowLevelMessage.fromMsg(msg)
-    logger.trace(s" --> ${new String(protocolMsg.content, StandardCharsets.UTF_8)}")
-
-    val buf = baos.synchronized {
-      baos.reset()
-      LowLevelMessageWriter.writeToByteBuffer(protocolMsg, baos, headerOut)
-    }
-
-    // No need to lock here, downstream observer *must* process `onNext` well in isolation
-    out.onNext(buf)
+    for {
+      _ <- Async[F].delay {
+        logger.trace(s" --> ${new String(protocolMsg.content, StandardCharsets.UTF_8)}")
+      }
+      buf <- Async[F].delay {
+        baos.synchronized {
+          baos.reset()
+          LowLevelMessageWriter.writeToByteBuffer(protocolMsg, baos, headerOut)
+        }
+      }
+      _ <- out.send(buf).void
+    } yield ()
   }
 }
 

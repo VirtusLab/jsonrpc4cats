@@ -1,15 +1,11 @@
 package jsonrpc4s
 
 import java.io.OutputStream
-import monix.execution.Callback
-import monix.eval.Task
-import monix.execution.Ack
-import monix.execution.Cancelable
-import monix.execution.atomic.Atomic
-import monix.execution.atomic.AtomicInt
-import monix.reactive.Observer
+import cats.effect.{Async, Deferred, Ref}
+import cats.effect.kernel.Sync
+import cats.syntax.all._
+import fs2.concurrent.Channel
 import scala.collection.concurrent.TrieMap
-import scala.concurrent.Future
 import scala.concurrent.duration.Duration
 import scribe.LoggerSupport
 import scala.util.Try
@@ -19,100 +15,137 @@ import com.github.plokhotnyuk.jsoniter_scala.core.readFromArray
 import com.github.plokhotnyuk.jsoniter_scala.core.writeToArray
 import java.nio.channels.WritableByteChannel
 
-class RpcClient(
-    out: Observer[Message],
+class RpcClient[F[_]](
+    channel: Channel[F, Message],
     logger: LoggerSupport
-) extends RpcActions {
+)(implicit F: Async[F])
+    extends RpcActions[F] {
 
-  protected val counter: AtomicInt = Atomic(1)
-  protected val activeServerRequests = TrieMap.empty[RequestId, Callback[Throwable, Response]]
+  protected val counter: Ref[F, Int] = Ref.unsafe[F, Int](1)
+  protected val activeServerRequests = TrieMap.empty[RequestId, Deferred[F, Response]]
 
   protected val notificationsLock = new Object()
   protected def toJson[R: JsonValueCodec](r: R): RawJson = RawJson(writeToArray(r))
 
-  def serverRespond(response: Response): Future[Ack] = {
+  def serverRespond(response: Response): F[Unit] = {
     response match {
-      case Response.None => Ack.Continue
-      case x: Response.Success => out.onNext(x)
-      case x: Response.Error => out.onNext(x)
+      case Response.None => F.unit
+      case x: Response.Success => channel.send(x).void
+      case x: Response.Error => channel.send(x).void
     }
   }
 
-  def clientRespond(response: Response): Unit = {
+  def clientRespond(response: Response): F[Unit] = {
     for {
-      id <- response match {
-        case Response.None => Some(RequestId.Null)
+      id <- F.delay(response match {
+        case Response.None => None
         case Response.Success(_, requestId, jsonrpc, _) => Some(requestId)
         case Response.Error(_, requestId, jsonrpc, _) => Some(requestId)
+      })
+      _ <- id match {
+        case None => F.unit
+        case Some(requestId) =>
+          F.delay(activeServerRequests.remove(requestId)).flatMap {
+            case None =>
+              F.delay(logger.error(s"Response to unknown request: $response"))
+            case Some(callback) =>
+              callback.complete(response).void
+          }
       }
-      callback <- activeServerRequests.remove(id).orElse {
-        logger.error(s"Response to unknown request: $response")
-        None
-      }
-    } {
-      callback.onSuccess(response)
-    }
+    } yield ()
   }
 
   def notify[A](
       endpoint: Endpoint[A, Unit],
       params: A,
       headers: Map[String, String] = Map.empty
-  ): Future[Ack] = {
+  ): F[Unit] = {
     import endpoint.codecA
     val msg = Notification(endpoint.method, Some(toJson(params)), headers)
 
     // Send notifications in the order they are sent by the caller
-    notificationsLock.synchronized {
-      out.onNext(msg)
-    }
+    F.delay {
+        notificationsLock.synchronized {
+          channel.send(msg)
+        }
+      }
+      .flatten
+      .void
   }
 
   def request[A, B](
       endpoint: Endpoint[A, B],
       params: A,
       headers: Map[String, String] = Map.empty
-  ): Task[RpcResponse[B]] = {
+  ): F[RpcResponse[B]] = {
     import endpoint.{codecA, codecB}
-    val reqId = RequestId(counter.incrementAndGet())
-    val response = Task.create[Response] { (s, cb) =>
-      val scheduled = s.scheduleOnce(Duration(0, "s")) {
-        val json = Request(endpoint.method, Some(toJson(params)), reqId, headers)
-        activeServerRequests.put(reqId, cb)
-        out.onNext(json)
-      }
-
-      Cancelable { () =>
-        scheduled.cancel()
-        val cancellation = Response.cancelled(reqId)
-        val cancelledErr = RpcFailure(endpoint.method, cancellation)
-        activeServerRequests.remove(reqId).foreach(_.onError(cancelledErr))
-        this.notify(RpcActions.cancelRequest, CancelParams(reqId))
-      }
-    }
-
-    response.map {
-      // This case can never happen given that no response isn't a valid JSON-RPC message
-      case Response.None => sys.error("Fatal error: obtained `Response.None`!")
-      case err: Response.Error => RpcFailure(endpoint.method, err)
-      case suc: Response.Success =>
-        Try(readFromArray[B](suc.result.value)).toEither match {
-          case Right(value) => RpcSuccess(value, suc)
-          case Left(err) =>
-            RpcFailure(endpoint.method, Response.invalidParams(err.toString, reqId))
+    for {
+      reqId <- counter.updateAndGet(_ + 1).map(RequestId.apply)
+      deferred <- Deferred[F, Response]
+      _ <- F.delay(activeServerRequests.put(reqId, deferred))
+      _ <- F
+        .delay {
+          val json = Request(endpoint.method, Some(toJson(params)), reqId, headers)
+          channel.send(json)
         }
-    }
+        .flatten
+        .void
+      response <- deferred.get
+      result <- response match {
+        // This case can never happen given that no response isn't a valid JSON-RPC message
+        case Response.None =>
+          F.raiseError(new RuntimeException("Fatal error: obtained `Response.None`!"))
+        case err: Response.Error => F.pure(RpcFailure(endpoint.method, err): RpcResponse[B])
+        case suc: Response.Success =>
+          F.delay(Try(readFromArray[B](suc.result.value)).toEither).map {
+            case Right(value) => RpcSuccess(value, suc): RpcResponse[B]
+            case Left(err) =>
+              RpcFailure(endpoint.method, Response.invalidParams(err.toString, reqId)): RpcResponse[
+                B
+              ]
+          }
+      }
+    } yield result
   }
 }
 
 object RpcClient {
-  def fromOutputStream(out: OutputStream, logger: LoggerSupport): RpcClient = {
-    val msgOut = Message.messagesToOutput(Left(out), logger)
-    new RpcClient(msgOut, logger)
+  def fromOutputStream[F[_]: Async](out: OutputStream, logger: LoggerSupport): F[RpcClient[F]] = {
+    for {
+      channel <- Channel.unbounded[F, Message]
+      outputChannel <- Message.messagesToOutput(Left(out), logger)
+      _ <- Async[F].start {
+        channel.stream
+          .evalMap { msg =>
+            outputChannel.send(msg).flatMap {
+              case Left(_) => Async[F].unit
+              case Right(_) => Async[F].unit
+            }
+          }
+          .compile
+          .drain
+      }
+    } yield new RpcClient[F](channel, logger)
   }
 
-  def fromChannel(channel: WritableByteChannel, logger: LoggerSupport): RpcClient = {
-    val msgOut = Message.messagesToOutput(Right(channel), logger)
-    new RpcClient(msgOut, logger)
+  def fromChannel[F[_]: Async](
+      channel: WritableByteChannel,
+      logger: LoggerSupport
+  ): F[RpcClient[F]] = {
+    for {
+      msgChannel <- Channel.unbounded[F, Message]
+      outputChannel <- Message.messagesToOutput(Right(channel), logger)
+      _ <- Async[F].start {
+        msgChannel.stream
+          .evalMap { msg =>
+            outputChannel.send(msg).flatMap {
+              case Left(_) => Async[F].unit
+              case Right(_) => Async[F].unit
+            }
+          }
+          .compile
+          .drain
+      }
+    } yield new RpcClient[F](msgChannel, logger)
   }
 }

@@ -1,10 +1,9 @@
 package jsonrpc4s
 
 import scribe.LoggerSupport
-
-import monix.eval.Task
-import monix.execution.Ack
-import monix.reactive.Observer
+import cats.effect.kernel.Async
+import fs2.concurrent.Channel
+import cats.syntax.all._
 
 import java.io.OutputStream
 import java.nio.ByteBuffer
@@ -100,131 +99,114 @@ object Message {
               in.objectEndOrCommaError()
             }
           }
-          p match {
-            case 12 | 28 => Request(method, params, id, Map.empty, jsonrpc)
-            case 31 => Response.None
-            case 22 => Response.Error(error, id, jsonrpc)
-            case 26 => Response.Success(result, id, jsonrpc)
-            case 13 | 29 => Notification(method, params, Map.empty, jsonrpc)
-            case _ => default
+          if (p == 63) {
+            in.decodeError("Empty JSON-RPC message")
+          } else if ((p & 1) != 0 && (p & 2) != 0 && (p & 4) == 0 && (p & 8) == 0) {
+            // Request
+            Request(method, params, id, Map.empty, jsonrpc)
+          } else if ((p & 1) == 0 && (p & 2) != 0 && (p & 4) == 0 && (p & 8) == 0) {
+            // Notification
+            Notification(method, params, Map.empty, jsonrpc)
+          } else if ((p & 1) != 0 && (p & 2) == 0 && (p & 4) != 0 && (p & 8) == 0) {
+            // Response.Success
+            Response.Success(result, id, jsonrpc, Map.empty)
+          } else if ((p & 1) != 0 && (p & 2) == 0 && (p & 4) == 0 && (p & 8) != 0) {
+            // Response.Error
+            Response.Error(error, id, jsonrpc, Map.empty)
+          } else {
+            in.decodeError(s"Invalid JSON-RPC message with field mask $p")
           }
-        } else in.readNullOrTokenError(default, '{')
-      if (msg == default) {
-        in.decodeError("Invalid JSON-RPC message, expected request, notification or response type")
-      }
+        } else {
+          in.decodeError("Expected JSON-RPC message to start with '{'")
+        }
       msg
     }
 
-    def encodeValue(msg: Message, out: JsonWriter): Unit = {
-      msg match {
-        case r: Request => Request.requestCodec.encodeValue(r.copy(headers = Map.empty), out)
-        case r: Notification =>
-          Notification.notificationCodec.encodeValue(r.copy(headers = Map.empty), out)
-        case r: Response => Response.responseCodec.encodeValue(r, out)
-      }
-    }
-
     def nullValue: Message = null
-
-    private def validateAndSwitchFieldMask(in: JsonReader, l: Int, p: Int, mask: Int): Int = {
-      if ((p & mask) != 0) {
-        p ^ mask
-      } else {
-        in.duplicatedKeyError(l)
+    def encodeValue(x: Message, out: JsonWriter): Unit = {
+      x match {
+        case r: Request => Request.requestCodec.encodeValue(r.copy(headers = Map.empty), out)
+        case n: Notification =>
+          Notification.notificationCodec.encodeValue(n.copy(headers = Map.empty), out)
+        case r: Response.Success =>
+          Response.successCodec.encodeValue(r.copy(headers = Map.empty), out)
+        case r: Response.Error => Response.errorCodec.encodeValue(r.copy(headers = Map.empty), out)
+        case Response.None => ()
       }
     }
   }
 
+  private def validateAndSwitchFieldMask(in: JsonReader, l: Int, p: Int, mask: Int): Int = {
+    if ((p & mask) != 0) {
+      in.decodeError(s"Duplicate field found in JSON-RPC message")
+    }
+    p & ~mask
+  }
+
   /**
-   * An observer implementation that writes JSON-RPC message to the
+   * Creates a message writer that writes JSON-RPC messages to the
    * underlying output. The output is internally transformed into
    * a [[java.nio.channels.WritableByteChannel]] for efficiency.
    *
    * @param out is either an output stream or a channel.
    * @param logger is the logger used to trace written messages and exceptions.
    */
-  def messagesToOutput(
+  def messagesToOutput[F[_]: Async](
       out: Either[OutputStream, WritableByteChannel],
       logger: LoggerSupport
-  ): Observer.Sync[Message] = {
-    new Observer.Sync[Message] {
-      private[this] val lock = new Object()
-      private[this] var isClosed: Boolean = false
-      private[this] val (channel, underlying) = out match {
-        case Left(out) => Channels.newChannel(out) -> Some(out)
-        case Right(channel) => channel -> None
-      }
-
-      private[this] val writer = new LowLevelChannelMessageWriter(channel, logger)
-      override def onNext(elem: Message): Ack = lock.synchronized {
-        if (isClosed) Ack.Stop
-        else {
-          try {
-            writer.write(elem) match {
-              case Ack.Continue => Ack.Continue
-              case Ack.Stop => Ack.Stop
-              case ack => Ack.Continue
+  ): F[Channel[F, Message]] = {
+    for {
+      channel <- Channel.unbounded[F, Message]
+      _ <- Async[F].start {
+        channel.stream
+          .evalMap { msg =>
+            val (channel, underlying) = out match {
+              case Left(out) => Channels.newChannel(out) -> Some(out)
+              case Right(channel) => channel -> None
             }
-          } catch {
-            case err: java.io.IOException =>
-              logger.trace(s"Found error when writing ${elem}, closing channel!", err)
-              isClosed = true
-              Ack.Stop
+            val writer = new LowLevelChannelMessageWriter(channel, logger)
+            Async[F].delay {
+              try {
+                writer.write(msg)
+              } catch {
+                case err: java.io.IOException =>
+                  logger.trace(s"Found error when writing ${msg}, closing channel!", err)
+                  channel.close()
+                  underlying.foreach(_.close())
+                  throw err
+              }
+            }
           }
-        }
+          .compile
+          .drain
       }
-
-      override def onError(err: Throwable): Unit = {
-        logger.trace("Caught error, stopped writing JSON-RPC messages to output stream!", err)
-        onComplete()
-      }
-
-      override def onComplete(): Unit = {
-        lock.synchronized {
-          channel.close()
-          underlying.foreach(_.close())
-          isClosed = true
-        }
-      }
-    }
+    } yield channel
   }
 
-  def messagesToByteBuffer(
-      out: Observer.Sync[ByteBuffer],
+  def messagesToByteBuffer[F[_]: Async](
+      out: Channel[F, ByteBuffer],
       logger: LoggerSupport
-  ): Observer.Sync[Message] = {
-    new Observer.Sync[Message] {
-      private[this] var isClosed = false
-      private[this] val writer = new LowLevelByteBufferMessageWriter(out, logger)
-      override def onNext(elem: Message): Ack = writer.synchronized {
-        if (isClosed) Ack.Stop
-        else {
-          try {
-            writer.write(elem)
-            Ack.Continue
-          } catch {
-            case err: java.io.IOException =>
-              logger.trace(s"Found error when writing ${elem}, closing channel!", err)
-              isClosed = true
-              Ack.Stop
+  ): F[Channel[F, Message]] = {
+    for {
+      channel <- Channel.unbounded[F, Message]
+      _ <- Async[F].start {
+        channel.stream
+          .evalMap { msg =>
+            val writer = new LowLevelByteBufferMessageWriter(out, logger)
+            Async[F].delay {
+              try {
+                writer.write(msg)
+              } catch {
+                case err: java.io.IOException =>
+                  logger.trace(s"Found error when writing ${msg}, closing channel!", err)
+                  throw err
+              }
+            }
           }
-        }
+          .compile
+          .drain
       }
-
-      override def onError(err: Throwable): Unit = {
-        logger.trace("Caught error, stopped writing JSON-RPC messages to byte buffer!", err)
-        onComplete()
-      }
-
-      override def onComplete(): Unit = {
-        out.synchronized {
-          if (isClosed) {
-            out.onComplete()
-            isClosed = true
-          }
-        }
-      }
-    }
+    } yield channel
   }
 }
 
@@ -237,7 +219,7 @@ final case class Request(
     jsonrpc: String = "2.0"
 ) extends Message {
   def toError(code: ErrorCode, message: String): Response =
-    Response.error(ErrorObject(code, message, None), id)
+    Response.Error(ErrorObject(code, message, scala.None), id)
 }
 
 object Request {
@@ -258,9 +240,7 @@ object Notification {
     JsonCodecMaker.make(CodecMakerConfig.withTransientDefault(false))
 }
 
-sealed trait Response extends Message {
-  def isSuccess: Boolean = this.isInstanceOf[Response.Success]
-}
+sealed trait Response extends Message
 
 object Response {
   // A case that doesn't exist in JSON-RPC but that exists to signal no response action
@@ -324,7 +304,7 @@ object Response {
   }
 
   def ok(result: RawJson, id: RequestId): Response = success(result, id)
-  def okAsync[T](value: T): Task[Either[Response.Error, T]] = Task(Right(value))
+  def okAsync[F[_]: Async, T](value: T): F[Either[Response.Error, T]] = Async[F].pure(Right(value))
   def success(result: RawJson, id: RequestId): Response = Success(result, id)
   def error(error: ErrorObject, id: RequestId): Response.Error = Error(error, id)
 

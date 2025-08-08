@@ -1,14 +1,17 @@
 //> using scala "2.12.19", "2.13.13"
 //> using jvm "8"
 //> using options "-Yrangepos" "-deprecation" "-Xlint"
-//> using dep "io.monix::monix:3.2.0"
+///> using dep "org.typelevel::cats-effect:3.6.3"
+//> using dep "co.fs2::fs2-core:3.12.0"
+//> using dep "co.fs2::fs2-io:3.12.0"
 //> using dep "com.outr::scribe:3.5.5"
 //> using dep "com.github.plokhotnyuk.jsoniter-scala::jsoniter-scala-core:2.13.5"
 
 //> using compileOnly.dep "com.github.plokhotnyuk.jsoniter-scala::jsoniter-scala-macros:2.13.5"
 
 //> using test.dep "com.outr::scribe-file:3.5.5"
-//> using test.dep "io.monix::minitest:2.9.6"
+//> using test.dep "org.typelevel::cats-effect-testing-scalatest:1.5.0"
+//> using test.dep "org.scalatest::scalatest:3.2.18"
 //> using test.dep "com.lihaoyi::pprint:0.6.6"
 
 //> using publish.organization "io.github.alexarchambault.bleep"

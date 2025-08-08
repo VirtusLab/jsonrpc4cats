@@ -1,28 +1,29 @@
 package jsonrpc4s
 
-import monix.eval.Task
+import cats.effect.kernel.Async
+import cats.syntax.all._
 import scribe.LoggerSupport
 
 import scala.util.{Try, Success, Failure}
 import com.github.plokhotnyuk.jsoniter_scala.core.readFromArray
 
-trait Service[A, B] {
-  def handle(request: A): Task[B]
+trait Service[F[_], A, B] {
+  def handle(request: A): F[B]
 }
 
 trait MethodName {
   def methodName: String
 }
 
-trait JsonRpcService extends Service[Message, Response]
-trait NamedJsonRpcService extends JsonRpcService with MethodName
+trait JsonRpcService[F[_]] extends Service[F, Message, Response]
+trait NamedJsonRpcService[F[_]] extends JsonRpcService[F] with MethodName
 
 object Service {
-  def request[A, B](endpoint: Endpoint[A, B])(
-      f: Service[A, B]
-  ): NamedJsonRpcService = new NamedJsonRpcService {
+  def request[F[_]: Async, A, B](endpoint: Endpoint[A, B])(
+      f: Service[F, A, B]
+  ): NamedJsonRpcService[F] = new NamedJsonRpcService[F] {
     override def methodName: String = endpoint.method
-    override def handle(message: Message): Task[Response] = {
+    override def handle(message: Message): F[Response] = {
       import endpoint.{codecA, codecB}
       val method = endpoint.method
       message match {
@@ -30,40 +31,41 @@ object Service {
           val paramsJson = params.getOrElse(RawJson.nullValue)
           Try(readFromArray[A](paramsJson.value)) match {
             case Success(value) =>
-              f.handle(value).materialize.map {
-                case Success(response) =>
-                  Response.ok(RawJson.toJson(response), id)
+              Async[F].attempt(f.handle(value)).flatMap {
+                case Right(response) =>
+                  Async[F].pure(Response.ok(RawJson.toJson(response), id))
                 // Errors always have a null id because services don't have access to the real id
-                case Failure(err: Response.Error) => err.copy(id = id)
-                case Failure(err) => Response.internalError(err, id)
+                case Left(err: Response.Error) => Async[F].pure(err.copy(id = id))
+                case Left(err) => Async[F].pure(Response.internalError(err.toString, id))
               }
-            case Failure(err) => Task(Response.invalidParams(err.toString, id))
+            case Failure(err) => Async[F].pure(Response.invalidParams(err.toString, id))
           }
 
-        case Request(invalidMethod, _, id, _, _) => Task(Response.methodNotFound(invalidMethod, id))
-        case _ => Task(Response.invalidRequest(s"Expected request, obtained $message"))
+        case Request(invalidMethod, _, id, _, _) =>
+          Async[F].pure(Response.methodNotFound(invalidMethod, id))
+        case _ => Async[F].pure(Response.invalidRequest(s"Expected request, obtained $message"))
       }
     }
   }
 
-  def notification[A](endpoint: Endpoint[A, Unit], logger: LoggerSupport)(
-      f: Service[A, Unit]
-  ): NamedJsonRpcService = {
-    new NamedJsonRpcService {
+  def notification[F[_]: Async, A](endpoint: Endpoint[A, Unit], logger: LoggerSupport)(
+      f: Service[F, A, Unit]
+  ): NamedJsonRpcService[F] = {
+    new NamedJsonRpcService[F] {
       override def methodName: String = endpoint.method
-      private def fail(msg: String): Task[Response] = Task.evalAsync {
+      private def fail(msg: String): F[Response] = Async[F].delay {
         logger.error(msg)
         Response.None
       }
 
-      override def handle(message: Message): Task[Response] = {
+      override def handle(message: Message): F[Response] = {
         import endpoint.codecA
         val method = endpoint.method
         message match {
           case Notification(`method`, params, _, headers) =>
             val paramsJson = params.getOrElse(RawJson.nullValue)
             Try(readFromArray[A](paramsJson.value)) match {
-              case Success(value) => f.handle(value).map(a => Response.None)
+              case Success(value) => f.handle(value).map(_ => Response.None)
               case Failure(err) => fail(s"Failed to parse notification $message. Errors: $err")
             }
           case Notification(invalidMethod, _, _, headers) =>
@@ -76,40 +78,42 @@ object Service {
 }
 
 object Services {
-  def empty(logger: LoggerSupport): Services = new Services(Nil, logger)
+  def empty[F[_]](logger: LoggerSupport): Services[F] = new Services(Nil, logger)
 }
 
-class Services private (
-    val services: List[NamedJsonRpcService],
+class Services[F[_]] private (
+    val services: List[NamedJsonRpcService[F]],
     logger: LoggerSupport
 ) {
-  def request[A, B](endpoint: Endpoint[A, B])(f: A => B): Services = {
-    requestAsync[A, B](endpoint)(new Service[A, B] {
-      def handle(request: A): Task[B] = Task.evalAsync(f(request))
+  def request[A, B](endpoint: Endpoint[A, B])(f: A => B)(implicit F: Async[F]): Services[F] = {
+    requestAsync[A, B](endpoint)(new Service[F, A, B] {
+      def handle(request: A): F[B] = F.delay(f(request))
     })
   }
 
   def requestAsync[A, B](
       endpoint: Endpoint[A, B]
-  )(f: Service[A, B]): Services = {
-    addService(Service.request[A, B](endpoint)(f))
+  )(f: Service[F, A, B])(implicit F: Async[F]): Services[F] = {
+    addService(Service.request[F, A, B](endpoint)(f))
   }
 
-  def notification[A](endpoint: Endpoint[A, Unit])(f: A => Unit): Services = {
-    notificationAsync[A](endpoint)(new Service[A, Unit] {
-      def handle(request: A): Task[Unit] = Task.evalAsync(f(request))
+  def notification[A](
+      endpoint: Endpoint[A, Unit]
+  )(f: A => Unit)(implicit F: Async[F]): Services[F] = {
+    notificationAsync[A](endpoint)(new Service[F, A, Unit] {
+      def handle(request: A): F[Unit] = F.delay(f(request))
     })
   }
 
   def notificationAsync[A](
       endpoint: Endpoint[A, Unit]
-  )(f: Service[A, Unit]): Services = {
-    addService(Service.notification[A](endpoint, logger)(f))
+  )(f: Service[F, A, Unit])(implicit F: Async[F]): Services[F] = {
+    addService(Service.notification[F, A](endpoint, logger)(f))
   }
 
-  def byMethodName: Map[String, NamedJsonRpcService] =
+  def byMethodName: Map[String, NamedJsonRpcService[F]] =
     services.iterator.map(s => s.methodName -> s).toMap
-  def addService(service: NamedJsonRpcService): Services = {
+  def addService(service: NamedJsonRpcService[F]): Services[F] = {
     val duplicate = services.find(_.methodName == service.methodName)
     require(
       duplicate.isEmpty,

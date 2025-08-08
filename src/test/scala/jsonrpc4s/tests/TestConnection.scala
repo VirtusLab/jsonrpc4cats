@@ -2,8 +2,8 @@ package jsonrpc4s.testkit
 
 import java.io.PipedInputStream
 import java.io.PipedOutputStream
-import monix.execution.Cancelable
-import monix.execution.Scheduler
+import cats.effect.{IO, Resource}
+import cats.syntax.all._
 import jsonrpc4s.Connection
 import jsonrpc4s.InputOutput
 import jsonrpc4s.RpcClient
@@ -17,14 +17,15 @@ import jsonrpc4s.Services
  * @param bob the running instance for Bob.
  * @param bobIO the input/output streams for Bob.
  */
-final class TestConnection(
-    val alice: Connection,
-    val aliceIO: InputOutput,
-    val bob: Connection,
-    val bobIO: InputOutput
-) extends Cancelable {
-  override def cancel(): Unit =
-    Cancelable.cancelAll(alice :: bob :: bobIO :: aliceIO :: Nil)
+final class TestConnection[F[_]](
+    val alice: Connection[F],
+    val aliceIO: InputOutput[F],
+    val bob: Connection[F],
+    val bobIO: InputOutput[F]
+) {
+  def cancel(implicit F: cats.effect.kernel.Async[F]): F[Unit] = {
+    alice.cancel *> bob.cancel *> aliceIO.close *> bobIO.close
+  }
 }
 
 object TestConnection {
@@ -36,21 +37,24 @@ object TestConnection {
    *
    * @param clientServices services implemented by the client.
    * @param serverServices services implemented by the server.
-   * @param s the scheduler to run all services.
    */
-  def apply(
-      clientServices: RpcClient => Services,
-      serverServices: RpcClient => Services
-  )(implicit s: Scheduler): TestConnection = {
+  def apply[F[_]: cats.effect.kernel.Async](
+      clientServices: RpcClient[F] => Services[F],
+      serverServices: RpcClient[F] => Services[F]
+  ): Resource[F, TestConnection[F]] = {
     val inAlice = new PipedInputStream()
     val inBob = new PipedInputStream()
     val outAlice = new PipedOutputStream(inBob)
     val outBob = new PipedOutputStream(inAlice)
-    val aliceIO = new InputOutput(inAlice, outAlice)
-    val bobIO = new InputOutput(inBob, outBob)
+    val aliceIO = new InputOutput[F](inAlice, outAlice)
+    val bobIO = new InputOutput[F](inBob, outBob)
     val alice = Connection.simple(aliceIO, "alice")(clientServices)
     val bob = Connection.simple(bobIO, "bob")(serverServices)
-    new TestConnection(alice, aliceIO, bob, bobIO)
+
+    for {
+      aliceConn <- alice
+      bobConn <- bob
+    } yield new TestConnection[F](aliceConn, aliceIO, bobConn, bobIO)
   }
 
 }

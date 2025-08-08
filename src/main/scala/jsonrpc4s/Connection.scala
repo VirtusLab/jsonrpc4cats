@@ -1,12 +1,9 @@
 package jsonrpc4s
 
-import monix.execution.Cancelable
-import monix.execution.CancelableFuture
-import monix.execution.Scheduler
-
+import cats.effect.{IO, Async, Resource}
+import cats.effect.kernel.Fiber
 import scribe.Logger
 import scribe.LoggerSupport
-import monix.eval.Task
 
 /**
  * A connection with another JSON-RPC entity.
@@ -14,33 +11,37 @@ import monix.eval.Task
  * @param client used to send requests/notification to the other entity.
  * @param server server on this side listening to input streams from the other entity.
  */
-final case class Connection(
-    client: RpcClient,
-    server: CancelableFuture[Unit]
-) extends Cancelable {
-  override def cancel(): Unit = server.cancel()
+final case class Connection[F[_]](
+    client: RpcClient[F],
+    server: Fiber[F, Throwable, Unit]
+) {
+  def cancel(implicit F: Async[F]): F[Unit] = server.cancel
 }
 
 object Connection {
 
-  def simple(io: InputOutput, name: String)(
-      f: RpcClient => Services
-  )(implicit s: Scheduler): Connection = {
+  def simple[F[_]: Async](io: InputOutput[F], name: String)(
+      f: RpcClient[F] => Services[F]
+  ): Resource[F, Connection[F]] = {
     Connection(io, Logger(s"$name-server"), Logger(s"$name-client"))(f)
   }
 
-  def apply(
-      io: InputOutput,
+  def apply[F[_]: Async](
+      io: InputOutput[F],
       serverLogger: LoggerSupport,
       clientLogger: LoggerSupport
   )(
-      f: RpcClient => Services
-  )(implicit s: Scheduler): Connection = {
-    val messages = LowLevelMessage
-      .fromInputStream(io.in, serverLogger)
-      .mapEval(msg => Task(LowLevelMessage.toMsg(msg)))
-    val client = RpcClient.fromOutputStream(io.out, clientLogger)
-    val server = RpcServer(messages, client, f(client), s, serverLogger)
-    Connection(client, server.startTask(Task.unit).executeAsync.runToFuture)
+      f: RpcClient[F] => Services[F]
+  ): Resource[F, Connection[F]] = {
+    for {
+      client <- Resource.eval(RpcClient.fromOutputStream(io.out, clientLogger))
+      messages = LowLevelMessage
+        .fromInputStream(io.in, serverLogger)
+        .evalMap(msg => Async[F].delay(LowLevelMessage.toMsg(msg)))
+      server = RpcServer(messages, client, f(client), serverLogger)
+      fiber <- Resource.make(
+        Async[F].start(server.startTask(Async[F].unit))
+      ) { fiber => fiber.cancel }
+    } yield Connection(client, fiber)
   }
 }

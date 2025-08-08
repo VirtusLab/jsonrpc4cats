@@ -1,9 +1,7 @@
 package jsonrpc4s
 
-import monix.eval.Task
-import monix.execution.Ack
+import cats.effect.kernel.Async
 
-import scala.concurrent.Future
 import com.github.plokhotnyuk.jsoniter_scala.core.writeToString
 import com.github.plokhotnyuk.jsoniter_scala.core.WriterConfig
 
@@ -40,41 +38,41 @@ object RpcFailure {
   }
 }
 
-trait RpcActions {
-  def serverRespond(response: Response): Future[Ack]
-  def clientRespond(response: Response): Unit
+trait RpcActions[F[_]] {
+  def serverRespond(response: Response): F[Unit]
+  def clientRespond(response: Response): F[Unit]
 
   def notify[A](
       endpoint: Endpoint[A, Unit],
       notification: A,
       headers: Map[String, String] = Map.empty
-  ): Future[Ack]
+  ): F[Unit]
 
   def request[A, B](
       endpoint: Endpoint[A, B],
       request: A,
       headers: Map[String, String] = Map.empty
-  ): Task[RpcResponse[B]]
+  ): F[RpcResponse[B]]
 }
 
 object RpcActions {
   import Endpoint.unitCodec
   object cancelRequest extends Endpoint[CancelParams, Unit]("$/cancelRequest")
 
-  val empty: RpcActions = new RpcActions {
+  def empty[F[_]: Async]: RpcActions[F] = new RpcActions[F] {
     override def request[A, B](
         endpoint: Endpoint[A, B],
         request: A,
         headers: Map[String, String] = Map.empty
-    ): Task[RpcResponse[B]] = Task.never
+    ): F[RpcResponse[B]] = Async[F].never
 
     override def notify[A](
         endpoint: Endpoint[A, Unit],
         notification: A,
         headers: Map[String, String] = Map.empty
-    ): Future[Ack] = Ack.Continue
+    ): F[Unit] = Async[F].unit
 
-    override def serverRespond(response: Response): Future[Ack] = Ack.Continue
-    override def clientRespond(response: Response): Unit = ()
+    override def serverRespond(response: Response): F[Unit] = Async[F].unit
+    override def clientRespond(response: Response): F[Unit] = Async[F].unit
   }
 }

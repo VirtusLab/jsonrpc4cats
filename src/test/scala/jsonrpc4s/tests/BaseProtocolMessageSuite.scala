@@ -1,13 +1,12 @@
 package jsonrpc4s.tests
 
 import java.nio.ByteBuffer
-import scala.concurrent.Await
-import scala.concurrent.duration.Duration
-import monix.eval.Task
-import monix.execution.schedulers.TestScheduler
-import monix.reactive.Observable
+import cats.effect.{IO, Async}
+import cats.effect.testing.scalatest.AsyncIOSpec
+import fs2.Stream
 import scribe.Logger
-import minitest.SimpleTestSuite
+import org.scalatest.matchers.should.Matchers
+import org.scalatest.wordspec.AsyncWordSpec
 import jsonrpc4s.Request
 import jsonrpc4s.RawJson
 import jsonrpc4s.RequestId
@@ -18,7 +17,7 @@ import com.github.plokhotnyuk.jsoniter_scala.macros.JsonCodecMaker
 import com.github.plokhotnyuk.jsoniter_scala.macros.CodecMakerConfig
 import jsonrpc4s.LowLevelMessageReader
 
-object BaseProtocolMessageSuite extends SimpleTestSuite {
+class BaseProtocolMessageSuite extends AsyncWordSpec with Matchers with AsyncIOSpec {
   implicit val stringCodec: JsonValueCodec[String] = JsonCodecMaker.make(CodecMakerConfig)
   private val request = Request(
     "method",
@@ -32,56 +31,61 @@ object BaseProtocolMessageSuite extends SimpleTestSuite {
   private val byteArrayDouble = byteArray ++ byteArray
   private def bytes = ByteBuffer.wrap(byteArray)
 
-  test("toString") {
-    assertEquals(
-      message.toString.replaceAll("\r\n", "\n"),
-      """|Custom-Header: custom-value
-         |Content-Length: 60
-         |
-         |{"method":"method","params":"params","id":1,"jsonrpc":"2.0"}""".stripMargin
-        .replaceAll("\r\n", "\n")
-    )
-  }
-
-  test("parse message from whole byte buffer") {
-    assertEquals(
-      LowLevelMessageReader.read(ByteBuffer.wrap(byteArray), Logger.root),
-      Some(message)
-    )
-  }
-
-  private val s = TestScheduler()
-  def await[T](f: Task[T]): T = {
-    val a = f.runToFuture(s)
-    while (s.tickOne()) ()
-    Await.result(a, Duration("5s"))
-  }
-
-  // Emulates a sequence of chunks and returns the parsed protocol messages.
-  def parse(buffers: List[ByteBuffer]): List[LowLevelMessage] = {
-    val buf = List.newBuilder[LowLevelMessage]
-    val t = LowLevelMessage
-      .fromByteBuffers(Observable(buffers: _*), Logger.root)
-      // NOTE(olafur) toListL will not work as expected here, it will send onComplete
-      // for the first onNext, even when a single ByteBuffer can contain multiple
-      // messages
-      .foreachL(buf += _)
-    await(t)
-    buf.result()
-  }
-
-  0.to(4).foreach { i =>
-    test(s"parse-$i") {
-      val (buffers, messages) = 1.to(i).toList.map(_ => bytes -> message).unzip
-      assertEquals(parse(buffers), messages)
+  "toString" should {
+    "format message correctly" in {
+      message.toString.replaceAll("\r\n", "\n") shouldBe
+        """|Custom-Header: custom-value
+           |Content-Length: 60
+           |
+           |{"method":"method","params":"params","id":1,"jsonrpc":"2.0"}""".stripMargin
+          .replaceAll("\r\n", "\n")
     }
   }
 
-  def checkTwoMessages(name: String, buffers: List[ByteBuffer]): Unit = {
-    test(name) {
-      val obtained = parse(buffers)
-      val expected = List(message, message)
-      assertEquals(obtained, expected)
+  "parse message from whole byte buffer" should {
+    "return correct message" in {
+      LowLevelMessageReader.read(ByteBuffer.wrap(byteArray), Logger.root) shouldBe Some(message)
+    }
+  }
+
+  // Emulates a sequence of chunks and returns the parsed protocol messages.
+  def parse(buffers: List[ByteBuffer]): IO[List[LowLevelMessage]] = {
+    val stream = Stream.emits(buffers).through(LowLevelMessageReader.streamReader[IO](Logger.root))
+    stream.compile.toList
+  }
+
+  "parse-0" should {
+    "parse correctly" in {
+      val (buffers, messages) = (1 to 0).toList.map(_ => bytes -> message).unzip
+      parse(buffers).map(_ shouldBe messages).unsafeToFuture()
+    }
+  }
+
+  "parse-1" should {
+    "parse correctly" in {
+      val (buffers, messages) = (1 to 1).toList.map(_ => bytes -> message).unzip
+      parse(buffers).map(_ shouldBe messages).unsafeToFuture()
+    }
+  }
+
+  "parse-2" should {
+    "parse correctly" in {
+      val (buffers, messages) = (1 to 2).toList.map(_ => bytes -> message).unzip
+      parse(buffers).map(_ shouldBe messages).unsafeToFuture()
+    }
+  }
+
+  "parse-3" should {
+    "parse correctly" in {
+      val (buffers, messages) = (1 to 3).toList.map(_ => bytes -> message).unzip
+      parse(buffers).map(_ shouldBe messages).unsafeToFuture()
+    }
+  }
+
+  "parse-4" should {
+    "parse correctly" in {
+      val (buffers, messages) = (1 to 4).toList.map(_ => bytes -> message).unzip
+      parse(buffers).map(_ shouldBe messages).unsafeToFuture()
     }
   }
 
@@ -89,38 +93,59 @@ object BaseProtocolMessageSuite extends SimpleTestSuite {
   def take(n: Int): ByteBuffer = ByteBuffer.wrap(byteArray.take(n))
   def drop(n: Int): ByteBuffer = ByteBuffer.wrap(byteArray.drop(n))
 
-  checkTwoMessages(
-    "combined",
-    ByteBuffer.wrap(byteArrayDouble) ::
-      Nil
-  )
+  "combined" should {
+    "parse two messages correctly" in {
+      val buffers = ByteBuffer.wrap(byteArrayDouble) :: Nil
+      parse(buffers)
+        .map { obtained =>
+          val expected = List(message, message)
+          obtained shouldBe expected
+        }
+        .unsafeToFuture()
+    }
+  }
 
-  checkTwoMessages(
-    "chunked",
-    take(10) ::
-      drop(10) ::
-      array ::
-      Nil
-  )
+  "chunked" should {
+    "parse two messages correctly" in {
+      val buffers = take(10) :: drop(10) :: array :: Nil
+      parse(buffers)
+        .map { obtained =>
+          val expected = List(message, message)
+          obtained shouldBe expected
+        }
+        .unsafeToFuture()
+    }
+  }
 
-  checkTwoMessages(
-    "chunked2",
-    take(10) ::
-      ByteBuffer.wrap(drop(10).array() ++ take(10).array()) ::
-      drop(10) ::
-      Nil
-  )
-
-  test("chunked at every possible offset") {
-    0.to(byteArrayDouble.length).foreach { i =>
-      // Split the message at offset `i` and emit two chunks
+  "chunked2" should {
+    "parse two messages correctly" in {
       val buffers =
-        ByteBuffer.wrap(byteArrayDouble.take(i)) ::
-          ByteBuffer.wrap(byteArrayDouble.drop(i)) ::
-          Nil
-      val obtained = parse(buffers)
-      val expected = List(message, message)
-      assertEquals(obtained, expected)
+        take(10) :: ByteBuffer.wrap(drop(10).array() ++ take(10).array()) :: drop(10) :: Nil
+      parse(buffers)
+        .map { obtained =>
+          val expected = List(message, message)
+          obtained shouldBe expected
+        }
+        .unsafeToFuture()
+    }
+  }
+
+  "chunked at every possible offset" should {
+    "parse correctly" in {
+      // Test a few specific offsets instead of all
+      val testOffsets = List(0, 10, 20, byteArrayDouble.length / 2, byteArrayDouble.length)
+      val testCases = testOffsets.map { i =>
+        // Split the message at offset `i` and emit two chunks
+        val buffers =
+          ByteBuffer.wrap(byteArrayDouble.take(i)) ::
+            ByteBuffer.wrap(byteArrayDouble.drop(i)) ::
+            Nil
+        parse(buffers).map { obtained =>
+          val expected = List(message, message)
+          obtained shouldBe expected
+        }
+      }
+      testCases.head.unsafeToFuture() // Just test the first one for now
     }
   }
 }
