@@ -9,9 +9,10 @@ import cats.syntax.all._
 final class InputOutput[F[_]](val in: InputStream, val out: OutputStream) {
   def close(implicit F: Sync[F]): F[Unit] = {
     Sync[F].delay {
-      println("Closing input/output streams")
+      println(s"Closing input/output streams for $this")
       in.close()
       out.close()
+      println(s"Input/output streams closed for $this")
     }
   }
 }

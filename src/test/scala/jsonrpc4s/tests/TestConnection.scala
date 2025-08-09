@@ -24,7 +24,7 @@ final class TestConnection[F[_]](
     val bobIO: InputOutput[F]
 ) {
   def cancel(implicit F: cats.effect.kernel.Async[F]): F[Unit] = {
-    alice.cancel *> bob.cancel *> aliceIO.close *> bobIO.close
+    aliceIO.close *> bobIO.close *> alice.cancel *> bob.cancel
   }
 }
 

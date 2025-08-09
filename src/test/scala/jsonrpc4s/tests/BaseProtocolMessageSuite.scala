@@ -47,7 +47,8 @@ object BaseProtocolMessageSuite extends SimpleIOSuite {
 
   // Emulates a sequence of chunks and returns the parsed protocol messages.
   def parse(buffers: List[ByteBuffer]): IO[List[LowLevelMessage]] = {
-    val stream = Stream.emits(buffers).through(LowLevelMessageReader.streamReader[IO](Logger.root))
+    val stream =
+      Stream.emits(buffers).through(LowLevelMessageReader.streamReader[IO](Logger.root, "chuj"))
     stream.compile.toList
   }
 
