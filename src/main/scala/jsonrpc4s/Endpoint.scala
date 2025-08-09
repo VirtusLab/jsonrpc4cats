@@ -1,14 +1,13 @@
 package jsonrpc4s
 
 import cats.effect.kernel.Async
-import cats.effect.kernel.Fiber
-import scala.concurrent.Future
 
 import com.github.plokhotnyuk.jsoniter_scala.core.JsonValueCodec
 import com.github.plokhotnyuk.jsoniter_scala.macros.JsonCodecMaker
 import com.github.plokhotnyuk.jsoniter_scala.macros.CodecMakerConfig
 import com.github.plokhotnyuk.jsoniter_scala.core.JsonReader
 import com.github.plokhotnyuk.jsoniter_scala.core.JsonWriter
+import scala.annotation.nowarn
 
 class Endpoint[A, B](
     val method: String
@@ -23,7 +22,7 @@ class Endpoint[A, B](
   def notify[F[_]: Async](
       notification: A,
       headers: Map[String, String] = Map.empty
-  )(implicit client: RpcActions[F], ev: B =:= Unit): F[Unit] = {
+  )(implicit client: RpcActions[F], @nowarn ev: B =:= Unit): F[Unit] = {
     // Safe to do because of `ev` proving that B == Unit at compile time
     val safeThis = this.asInstanceOf[Endpoint[A, Unit]]
     client.notify[A](safeThis, notification, headers)
@@ -42,7 +41,10 @@ object Endpoint {
     val emptyCodec = JsonCodecMaker.make[Empty](CodecMakerConfig)
 
     new JsonValueCodec[Unit] {
-      def decodeValue(in: JsonReader, default: Unit) = emptyCodec.decodeValue(in, empty)
+      def decodeValue(in: JsonReader, default: Unit) = {
+        emptyCodec.decodeValue(in, empty)
+        ()
+      }
       def encodeValue(x: Unit, out: JsonWriter) = emptyCodec.encodeValue(empty, out)
       def nullValue = ()
     }

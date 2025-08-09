@@ -27,7 +27,7 @@ object Service {
       import endpoint.{codecA, codecB}
       val method = endpoint.method
       message match {
-        case Request(`method`, params, id, jsonrpc, headers) =>
+        case Request(`method`, params, id, _, _) =>
           val paramsJson = params.getOrElse(RawJson.nullValue)
           Try(readFromArray[A](paramsJson.value)) match {
             case Success(value) =>
@@ -48,7 +48,10 @@ object Service {
     }
   }
 
-  def notification[F[_]: Async, A](endpoint: Endpoint[A, Unit], logger: LoggerSupport)(
+  def notification[F[_]: Async, A](
+      endpoint: Endpoint[A, Unit],
+      logger: LoggerSupport
+  )(
       f: Service[F, A, Unit]
   ): NamedJsonRpcService[F] = {
     new NamedJsonRpcService[F] {
@@ -62,13 +65,13 @@ object Service {
         import endpoint.codecA
         val method = endpoint.method
         message match {
-          case Notification(`method`, params, _, headers) =>
+          case Notification(`method`, params, _, _) =>
             val paramsJson = params.getOrElse(RawJson.nullValue)
             Try(readFromArray[A](paramsJson.value)) match {
               case Success(value) => f.handle(value).map(_ => Response.None)
               case Failure(err) => fail(s"Failed to parse notification $message. Errors: $err")
             }
-          case Notification(invalidMethod, _, _, headers) =>
+          case Notification(invalidMethod, _, _, _) =>
             fail(s"Expected method '$method', obtained '$invalidMethod'")
           case _ => fail(s"Expected notification, obtained $message")
         }
@@ -113,6 +116,7 @@ class Services[F[_]] private (
 
   def byMethodName: Map[String, NamedJsonRpcService[F]] =
     services.iterator.map(s => s.methodName -> s).toMap
+
   def addService(service: NamedJsonRpcService[F]): Services[F] = {
     val duplicate = services.find(_.methodName == service.methodName)
     require(

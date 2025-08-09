@@ -106,20 +106,14 @@ object BaseProtocolMessageSuite extends SimpleIOSuite {
   }
 
   test("chunked at every possible offset should parse correctly") {
-    // Test a few specific offsets instead of all
-    val testOffsets = List(0, 10, 20, byteArrayDouble.length / 2, byteArrayDouble.length)
-    val buffers = testOffsets.flatMap { i =>
-      List(
-        ByteBuffer.wrap(byteArrayDouble.take(i)),
-        ByteBuffer.wrap(byteArrayDouble.drop(i))
-      )
-    }
-    parse(buffers).map { obtained =>
-      val expected = List(message, message)
-      // We concatenated several test cases, so check the result is divisible by two and each pair equals message
-      val evenLength = obtained.length % 2 == 0
-      val pairsOk = obtained.grouped(2).forall(pair => pair == List(message, message))
-      expect(evenLength && pairsOk)
-    }
+    val offsets = (0 to byteArrayDouble.length).toList
+    IO.traverse(offsets) { i =>
+        val buffers = List(
+          ByteBuffer.wrap(byteArrayDouble.take(i)),
+          ByteBuffer.wrap(byteArrayDouble.drop(i))
+        )
+        parse(buffers).map { obtained => expect(obtained == List(message, message)) }
+      }
+      .map { expectations => expectations.foldLeft(expect(true))(_ && _) }
   }
 }

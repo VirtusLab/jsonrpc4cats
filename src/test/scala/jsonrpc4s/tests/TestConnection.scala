@@ -2,7 +2,7 @@ package jsonrpc4s.testkit
 
 import java.io.PipedInputStream
 import java.io.PipedOutputStream
-import cats.effect.{IO, Resource}
+import cats.effect.Resource
 import cats.syntax.all._
 import jsonrpc4s.Connection
 import jsonrpc4s.InputOutput
@@ -46,14 +46,11 @@ object TestConnection {
     val inBob = new PipedInputStream()
     val outAlice = new PipedOutputStream(inBob)
     val outBob = new PipedOutputStream(inAlice)
-    val aliceIO = new InputOutput[F](inAlice, outAlice)
-    val bobIO = new InputOutput[F](inBob, outBob)
-    val alice = Connection.simple(aliceIO, "alice")(clientServices)
-    val bob = Connection.simple(bobIO, "bob")(serverServices)
-
     for {
-      aliceConn <- alice
-      bobConn <- bob
+      aliceIO <- InputOutput.resource[F](inAlice, outAlice)
+      bobIO <- InputOutput.resource[F](inBob, outBob)
+      aliceConn <- Connection.simple(aliceIO, "alice")(clientServices)
+      bobConn <- Connection.simple(bobIO, "bob")(serverServices)
     } yield new TestConnection[F](aliceConn, aliceIO, bobConn, bobIO)
   }
 

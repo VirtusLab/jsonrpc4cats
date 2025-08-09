@@ -1,6 +1,6 @@
 package jsonrpc4s
 
-import cats.effect.{Async, Deferred}
+import cats.effect.Async
 import cats.effect.kernel.{Fiber, Outcome}
 import fs2.Stream
 import scala.collection.concurrent.TrieMap
@@ -29,12 +29,12 @@ class RpcServer[F[_]] protected (
                 )
               }
             case Some(request) =>
-              F.delay {
-                logger.info(s"Cancelling request $id")
-                request.cancel
-                activeClientRequests.remove(id)
-                Response.cancelled(id)
-              }.void
+              logger.info(s"Cancelling request $id")
+              request.cancel *>
+                F.delay {
+                  activeClientRequests.remove(id)
+                  Response.cancelled(id)
+                }.void
           }
         }
       }
@@ -45,48 +45,45 @@ class RpcServer[F[_]] protected (
     services.addService(cancelNotification).byMethodName
 
   def cancelActiveClientRequests(): F[Unit] =
-    F.delay(activeClientRequests.values.foreach(_.cancel))
+    activeClientRequests.values.toVector.map(_.cancel).sequence_
 
   def waitForActiveClientRequests: F[Unit] = {
     val fibers = activeClientRequests.values.map(fiber => fiber.join.void)
     // Await until completion and ignore task results
-    fibers.toList.sequence.void
+    fibers.toList.sequence_
   }
 
-  protected def handleResponse(response: Response): F[Response] = {
-    F.delay {
-      client.clientRespond(response)
-      Response.None
-    }
-  }
+  protected def handleResponse(response: Response): F[Response] =
+    client.clientRespond(response).map(_ => Response.None)
 
   protected def handleRequest(request: Request): F[Response] = {
     val Request(method, _, id, _, _) = request
-    F.delay(handlersByMethodName.get(method)).flatMap {
-      case None =>
-        F.delay {
-          logger.info(s"Method not found '$method'")
-          Response.methodNotFound(method, id)
-        }
+    F.delay(println(s"Handling request in server: $request")) *>
+      F.delay(handlersByMethodName.get(method)).flatMap {
+        case None =>
+          F.delay {
+            logger.info(s"Method not found '$method'")
+            Response.methodNotFound(method, id)
+          }
 
-      case Some(handler) =>
-        val response = handler.handle(request).handleErrorWith {
-          case NonFatal(e) =>
-            F.delay {
-              logger.error(s"Unhandled JSON-RPC error handling request $request", e)
-              Response.internalError(e.getMessage, request.id)
-            }
-        }
-        for {
-          fiber <- Async[F].start(response)
-          _ <- F.delay(activeClientRequests.put(request.id, fiber))
-          result <- fiber.join.flatMap {
-            case Outcome.Succeeded(fa) => fa
-            case Outcome.Errored(e) => F.raiseError(e)
-            case Outcome.Canceled() => F.raiseError(new RuntimeException("Request was canceled"))
-          }: F[Response]
-        } yield result
-    }
+        case Some(handler) =>
+          val response = handler.handle(request).handleErrorWith {
+            case NonFatal(e) =>
+              F.delay {
+                logger.error(s"Unhandled JSON-RPC error handling request $request", e)
+                Response.internalError(e.getMessage, request.id)
+              }
+          }
+          for {
+            fiber <- Async[F].start(response)
+            _ <- F.delay(activeClientRequests.put(request.id, fiber))
+            result <- fiber.join.flatMap {
+              case Outcome.Succeeded(fa) => fa
+              case Outcome.Errored(e) => F.raiseError(e)
+              case Outcome.Canceled() => F.raiseError(new RuntimeException("Request was canceled"))
+            }: F[Response]
+          } yield result
+      }
   }
 
   protected def handleNotification(notification: Notification): F[Response] = {
@@ -127,21 +124,24 @@ class RpcServer[F[_]] protected (
     }
   }
 
-  def startTask(afterSubscribe: F[Unit]): F[Unit] = {
-    afterSubscribe >> in
-      .evalMap { msg =>
-        handleValidMessage(msg)
-          .flatMap {
-            case Response.None => F.unit
-            case response => client.serverRespond(response)
-          }
-          .handleErrorWith {
-            case NonFatal(e) =>
-              F.delay(logger.error("Unhandled error responding to JSON-RPC client", e))
-          }
-      }
-      .compile
-      .drain
+  def startTask: F[Unit] = {
+    F.onCancel(
+      in.evalMap { msg =>
+          handleValidMessage(msg)
+            .flatTap(response => F.delay(println(s"RpcServer responding $response to client")))
+            .flatMap {
+              case Response.None => F.unit
+              case response => client.serverRespond(response)
+            }
+            .handleErrorWith {
+              case NonFatal(e) =>
+                F.delay(logger.error("Unhandled error responding to JSON-RPC client", e))
+            }
+        }
+        .compile
+        .drain,
+      F.delay(println("RpcServer.startTask cancelled"))
+    )
   }
 }
 

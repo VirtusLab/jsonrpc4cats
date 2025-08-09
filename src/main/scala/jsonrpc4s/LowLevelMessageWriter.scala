@@ -37,11 +37,11 @@ sealed trait LowLevelMessageWriter {
  * @param out is an output stream where the writer writes directly.
  * @param logger is a logger where we trace messages if level allows.
  */
-final class LowLevelChannelMessageWriter(
+final class LowLevelChannelMessageWriter[F[_]: Async](
     channel: WritableByteChannel,
     logger: LoggerSupport
 ) extends LowLevelMessageWriter {
-  def write[F[_]: Async](msg: Message): F[Unit] = {
+  def write(msg: Message): F[Unit] = {
     val protocolMsg = LowLevelMessage.fromMsg(msg)
     Async[F].delay {
       logger.trace(
@@ -50,6 +50,8 @@ final class LowLevelChannelMessageWriter(
            |  --> content: ${new String(protocolMsg.content, StandardCharsets.UTF_8)}
          """.stripMargin
       )
+      println(s"Writing message to buffer: ${protocolMsg.header.mkString(", ")}")
+      println(s"Content: ${new String(protocolMsg.content, StandardCharsets.UTF_8)}")
 
       val buf = baos.synchronized {
         baos.reset()
@@ -57,6 +59,7 @@ final class LowLevelChannelMessageWriter(
       }
 
       channel.synchronized { channel.write(buf) }
+      ()
     }
   }
 }
@@ -74,9 +77,9 @@ final class LowLevelByteBufferMessageWriter[F[_]: Async](
   def write(msg: Message): F[Unit] = {
     val protocolMsg = LowLevelMessage.fromMsg(msg)
     for {
-      _ <- Async[F].delay {
+      _ <- Async[F].delay(
         logger.trace(s" --> ${new String(protocolMsg.content, StandardCharsets.UTF_8)}")
-      }
+      )
       buf <- Async[F].delay {
         baos.synchronized {
           baos.reset()

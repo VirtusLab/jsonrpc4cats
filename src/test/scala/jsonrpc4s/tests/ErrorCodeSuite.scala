@@ -1,7 +1,6 @@
 package jsonrpc4s.tests
 
 import weaver._
-import cats.effect.IO
 import jsonrpc4s.ErrorCode
 import com.github.plokhotnyuk.jsoniter_scala.core.{readFromArray, writeToArray, writeToString}
 import com.github.plokhotnyuk.jsoniter_scala.core.JsonValueCodec

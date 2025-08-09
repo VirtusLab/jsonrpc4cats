@@ -6,7 +6,6 @@ import java.nio.charset.StandardCharsets
 import java.util
 
 import fs2.Stream
-import fs2.io.file.Files
 import cats.effect.kernel.Async
 import scribe.LoggerSupport
 
@@ -52,7 +51,18 @@ object LowLevelMessage {
   ): Stream[F, LowLevelMessage] = {
     // FIXME: Use bracket to handle this resource correctly if something fails
     fromByteBuffers(
-      fs2.io.readInputStream[F](Async[F].pure(in), 4096).chunks.map(_.toByteBuffer),
+      fs2.io
+        .readInputStream[F](Async[F].pure(in), 4096, closeAfterUse = false)
+        .chunks
+        .evalTap(chunk =>
+          Async[F]
+            .delay(
+              println(
+                s"Received chunk:\n--------START CHUNK--------\n${new String(chunk.toArray, StandardCharsets.UTF_8)}\n---------END CHUNK---------"
+              )
+            )
+        )
+        .map(_.toByteBuffer),
       logger
     )
   }
@@ -69,17 +79,19 @@ object LowLevelMessage {
       logger: LoggerSupport
   ): Stream[F, LowLevelMessage] = {
     in.through(LowLevelMessageReader.streamReader(logger))
+      .evalTap(msg => Async[F].delay(println(s"Received after LowLevelMessageReader: $msg")))
   }
 
   def toMsg(message: LowLevelMessage): Message = {
     import com.github.plokhotnyuk.jsoniter_scala.core.readFromArray
+    println(s"Content:\n'${new String(message.content, StandardCharsets.UTF_8)}'\n")
     // Make sure we propagate headers from the transport to the read message before handling
     Try(readFromArray[Message](message.content)) match {
       case Success(msg: Request) => msg.copy(headers = message.header)
       case Success(msg: Notification) => msg.copy(headers = message.header)
       case Success(msg: Response.Error) => msg.copy(headers = message.header)
       case Success(msg: Response.Success) => msg.copy(headers = message.header)
-      case Success(msg @ Response.None) => msg
+      case Success(msg: Response.None.type) => msg
       case Failure(err) => Response.parseError(err.toString)
     }
   }

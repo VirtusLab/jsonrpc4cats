@@ -6,7 +6,7 @@ import com.github.plokhotnyuk.jsoniter_scala.core.writeToString
 import com.github.plokhotnyuk.jsoniter_scala.core.WriterConfig
 
 /** Represents a response for a client RPC request.  */
-sealed trait RpcResponse[T]
+sealed trait RpcResponse[+T]
 
 /**
  * Represents a successful client RPC request.
@@ -25,11 +25,11 @@ final case class RpcSuccess[T](
  * @param methodName is the name of the method that failed to complete.
  * @param underlying is the underlying JSON-RPC error message.
  */
-final case class RpcFailure[T](
+final case class RpcFailure(
     methodName: String,
     underlying: jsonrpc4s.Response.Error
 ) extends RuntimeException(RpcFailure.toMsg(methodName, underlying))
-    with RpcResponse[T]
+    with RpcResponse[Nothing]
 
 object RpcFailure {
   def toMsg(methodName: String, err: Response.Error): String = {

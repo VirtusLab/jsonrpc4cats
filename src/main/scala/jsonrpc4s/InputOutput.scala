@@ -3,11 +3,13 @@ package jsonrpc4s
 import java.io.InputStream
 import java.io.OutputStream
 import cats.effect.{Resource, Sync}
+import cats.syntax.all._
 
 /** Wrapper around a pair of input/output streams. */
 final class InputOutput[F[_]](val in: InputStream, val out: OutputStream) {
   def close(implicit F: Sync[F]): F[Unit] = {
-    F.delay {
+    Sync[F].delay {
+      println("Closing input/output streams")
       in.close()
       out.close()
     }
@@ -21,6 +23,6 @@ object InputOutput {
   def resource[F[_]: Sync](in: InputStream, out: OutputStream): Resource[F, InputOutput[F]] = {
     Resource.make(
       Sync[F].delay(new InputOutput[F](in, out))
-    ) { io => io.close }
+    ) { io => Sync[F].delay(println("Closing input/output streams (resource)")) *> io.close }
   }
 }

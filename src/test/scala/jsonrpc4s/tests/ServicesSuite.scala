@@ -15,14 +15,14 @@ object ServicesSuite extends FunSuite {
   test("duplicate method should throw IllegalArgumentException") {
     val duplicate = Endpoint.notification[Int]("duplicate")
     val base = Services.empty[IO](Logger.root).notification(duplicate)(_ => ())
-    
+
     expect {
       try {
         base.notification(duplicate)(_ => ())
         false
       } catch {
         case _: IllegalArgumentException => true
-        case _ => false
+        case _: Throwable => false
       }
     }
   }

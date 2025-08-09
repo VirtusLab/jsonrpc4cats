@@ -99,48 +99,39 @@ object Message {
               in.objectEndOrCommaError()
             }
           }
-          if (p == 63) {
-            in.decodeError("Empty JSON-RPC message")
-          } else if ((p & 1) != 0 && (p & 2) != 0 && (p & 4) == 0 && (p & 8) == 0) {
-            // Request
-            Request(method, params, id, Map.empty, jsonrpc)
-          } else if ((p & 1) == 0 && (p & 2) != 0 && (p & 4) == 0 && (p & 8) == 0) {
-            // Notification
-            Notification(method, params, Map.empty, jsonrpc)
-          } else if ((p & 1) != 0 && (p & 2) == 0 && (p & 4) != 0 && (p & 8) == 0) {
-            // Response.Success
-            Response.Success(result, id, jsonrpc, Map.empty)
-          } else if ((p & 1) != 0 && (p & 2) == 0 && (p & 4) == 0 && (p & 8) != 0) {
-            // Response.Error
-            Response.Error(error, id, jsonrpc, Map.empty)
-          } else {
-            in.decodeError(s"Invalid JSON-RPC message with field mask $p")
+          p match {
+            case 12 | 28 => Request(method, params, id, Map.empty, jsonrpc)
+            case 31 => Response.None
+            case 22 => Response.Error(error, id, jsonrpc)
+            case 26 => Response.Success(result, id, jsonrpc)
+            case 13 | 29 => Notification(method, params, Map.empty, jsonrpc)
+            case _ => default
           }
-        } else {
-          in.decodeError("Expected JSON-RPC message to start with '{'")
-        }
+        } else in.readNullOrTokenError(default, '{')
+      if (msg == default) {
+        in.decodeError("Invalid JSON-RPC message, expected request, notification or response type")
+      }
       msg
     }
 
-    def nullValue: Message = null
-    def encodeValue(x: Message, out: JsonWriter): Unit = {
-      x match {
+    def encodeValue(msg: Message, out: JsonWriter): Unit = {
+      msg match {
         case r: Request => Request.requestCodec.encodeValue(r.copy(headers = Map.empty), out)
-        case n: Notification =>
-          Notification.notificationCodec.encodeValue(n.copy(headers = Map.empty), out)
-        case r: Response.Success =>
-          Response.successCodec.encodeValue(r.copy(headers = Map.empty), out)
-        case r: Response.Error => Response.errorCodec.encodeValue(r.copy(headers = Map.empty), out)
-        case Response.None => ()
+        case r: Notification =>
+          Notification.notificationCodec.encodeValue(r.copy(headers = Map.empty), out)
+        case r: Response => Response.responseCodec.encodeValue(r, out)
       }
     }
-  }
 
-  private def validateAndSwitchFieldMask(in: JsonReader, l: Int, p: Int, mask: Int): Int = {
-    if ((p & mask) != 0) {
-      in.decodeError(s"Duplicate field found in JSON-RPC message")
+    def nullValue: Message = null
+
+    private def validateAndSwitchFieldMask(in: JsonReader, l: Int, p: Int, mask: Int): Int = {
+      if ((p & mask) != 0) {
+        p ^ mask
+      } else {
+        in.duplicatedKeyError(l)
+      }
     }
-    p & ~mask
   }
 
   /**
@@ -156,31 +147,31 @@ object Message {
       logger: LoggerSupport
   ): F[Channel[F, Message]] = {
     for {
-      channel <- Channel.unbounded[F, Message]
+      sink <- Channel.unbounded[F, Message]
       _ <- Async[F].start {
-        channel.stream
+        sink.stream
           .evalMap { msg =>
-            val (channel, underlying) = out match {
-              case Left(out) => Channels.newChannel(out) -> Some(out)
-              case Right(channel) => channel -> None
+            val channel = out match {
+              case Left(out) => Channels.newChannel(out)
+              case Right(channel) => channel
             }
             val writer = new LowLevelChannelMessageWriter(channel, logger)
             Async[F].delay {
               try {
+                println(s"Writing message $msg to OutputStream")
                 writer.write(msg)
               } catch {
                 case err: java.io.IOException =>
                   logger.trace(s"Found error when writing ${msg}, closing channel!", err)
                   channel.close()
-                  underlying.foreach(_.close())
                   throw err
               }
-            }
+            }.flatten *> Async[F].delay(println(s"Message written to OutputStream"))
           }
           .compile
           .drain
       }
-    } yield channel
+    } yield sink
   }
 
   def messagesToByteBuffer[F[_]: Async](
@@ -264,7 +255,9 @@ object Response {
       /** @inheritdoc */
       headers: Map[String, String] = Map.empty
   ) extends RuntimeException(errorToMsg(id, error, headers))
-      with Response
+      with Response {
+    def isCancelled: Boolean = error.code == ErrorCode.RequestCancelled
+  }
 
   def errorToMsg(id: RequestId, error: ErrorObject, headers: Map[String, String]): String = {
     case class StringifiedError(id: RequestId, error: ErrorObject, headers: Map[String, String])
@@ -293,10 +286,10 @@ object Response {
       val json = RawJson.codec.decodeValue(in, RawJson.codec.nullValue)
       RawJson.parseJsonTo[Success](json) match {
         case Right(msg) => msg.copy(headers = Map.empty)
-        case Left(err) =>
+        case Left(_) =>
           RawJson.parseJsonTo[Error](json) match {
             case Right(msg) => msg.copy(headers = Map.empty)
-            case Left(err) =>
+            case Left(_) =>
               in.decodeError("Failed to decode JSON-RPC message, missing 'result' or 'error'")
           }
       }
