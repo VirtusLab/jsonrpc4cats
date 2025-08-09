@@ -4,13 +4,14 @@ import java.io.ByteArrayOutputStream
 import java.io.PrintStream
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
-import org.scalatest.matchers.should.Matchers
-import org.scalatest.wordspec.AnyWordSpec
+import weaver._
+import cats.effect.IO
 import scribe.file.FileWriter
 
-class FileLoggerSuite extends AnyWordSpec with Matchers {
-  "logs" should {
-    "not go to stdout" in {
+object FileLoggerSuite extends SimpleIOSuite {
+
+  test("logs should not go to stdout") {
+    IO {
       val path = Files.createTempFile("lsp4s", ".log")
       val baos = new ByteArrayOutputStream()
 
@@ -22,12 +23,15 @@ class FileLoggerSuite extends AnyWordSpec with Matchers {
         logger.error("This is error")
       }
       val obtainedOut = baos.toString()
-      obtainedOut shouldBe empty
       val obtainedLogs =
         new String(Files.readAllBytes(path), StandardCharsets.UTF_8)
-      List("info", "warning", "error").foreach { message =>
-        obtainedLogs should include(s"This is $message")
+
+      val outIsEmpty = obtainedOut.isEmpty
+      val logsContainMessages = List("info", "warning", "error").forall { message =>
+        obtainedLogs.contains(s"This is $message")
       }
+
+      expect(outIsEmpty) and expect(logsContainMessages)
     }
   }
 }

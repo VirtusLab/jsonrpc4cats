@@ -1,33 +1,52 @@
 package jsonrpc4s.tests
 
-import org.scalatest.matchers.should.Matchers
-import org.scalatest.wordspec.AnyWordSpec
+import weaver._
+import cats.effect.IO
 import jsonrpc4s.ErrorCode
 import com.github.plokhotnyuk.jsoniter_scala.core.{readFromArray, writeToArray, writeToString}
 import com.github.plokhotnyuk.jsoniter_scala.core.JsonValueCodec
 import com.github.plokhotnyuk.jsoniter_scala.macros.JsonCodecMaker
 import com.github.plokhotnyuk.jsoniter_scala.macros.CodecMakerConfig
 
-class ErrorCodeSuite extends AnyWordSpec with Matchers {
+object ErrorCodeSuite extends FunSuite {
 
   implicit val intCodec: JsonValueCodec[Int] = JsonCodecMaker.make(CodecMakerConfig)
 
-  def check(code: Int, expected: ErrorCode): Unit = {
-    expected.toString should {
-      "serialize and deserialize correctly" in {
-        val obtained = readFromArray[ErrorCode](writeToArray(code))
-        obtained shouldBe expected
-        val obtainedJson = writeToString(expected)
-        obtainedJson shouldBe code.toString
-      }
-    }
+  test("ErrorCode 666 serializes and deserializes correctly") {
+    val expected = ErrorCode.Unknown(666)
+    val obtained = readFromArray[ErrorCode](writeToArray(666))
+    val obtainedJson = writeToString[ErrorCode](expected)
+
+    expect(obtained == expected) and
+      expect(obtainedJson == "666")
   }
 
-  check(666, ErrorCode.Unknown(666))
-  check(-32000, ErrorCode.Unknown(-32000))
-  check(-32099, ErrorCode.Unknown(-32099))
+  test("ErrorCode -32000 serializes and deserializes correctly") {
+    val expected = ErrorCode.Unknown(-32000)
+    val obtained = readFromArray[ErrorCode](writeToArray(-32000))
+    val obtainedJson = writeToString[ErrorCode](expected)
+
+    expect(obtained == expected) and
+      expect(obtainedJson == "-32000")
+  }
+
+  test("ErrorCode -32099 serializes and deserializes correctly") {
+    val expected = ErrorCode.Unknown(-32099)
+    val obtained = readFromArray[ErrorCode](writeToArray(-32099))
+    val obtainedJson = writeToString[ErrorCode](expected)
+
+    expect(obtained == expected) and
+      expect(obtainedJson == "-32099")
+  }
+
+  // Test builtin error codes
   ErrorCode.builtin.foreach { code =>
-    // Check code is same
-    check(code.value, code)
+    test(s"ErrorCode ${code.value} (${code}) serializes and deserializes correctly") {
+      val obtained = readFromArray[ErrorCode](writeToArray(code.value))
+      val obtainedJson = writeToString(code)
+
+      expect(obtained == code) and
+        expect(obtainedJson == code.value.toString)
+    }
   }
 }

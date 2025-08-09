@@ -1,11 +1,7 @@
 package jsonrpc4s.tests
 
-import java.util.concurrent.ConcurrentLinkedQueue
-import cats.effect.{IO, Async}
-import cats.effect.testing.scalatest.AsyncIOSpec
-import org.scalatest.matchers.should.Matchers
-import org.scalatest.wordspec.AsyncWordSpec
-import scala.jdk.CollectionConverters._
+import weaver._
+import cats.effect.IO
 import scribe.Logger
 import jsonrpc4s.Endpoint
 import jsonrpc4s.Services
@@ -40,36 +36,35 @@ import jsonrpc4s.{RpcSuccess, RpcFailure}
  * -->> indicates request
  * ->>> indicates response
  */
-class PingPongSuite extends AsyncWordSpec with Matchers with AsyncIOSpec {
+object PingPongSuite extends SimpleIOSuite {
 
   implicit val stringCodec: JsonValueCodec[String] = JsonCodecMaker.make(CodecMakerConfig)
   private val Ping = Endpoint.notification[String]("ping")
   private val Pong = Endpoint.notification[String]("pong")
   private val Hello = Endpoint.request[String, String]("hello")
 
-  "ping pong" should {
-    "work correctly" in {
-      val services = Services
-        .empty[IO](Logger.root)
-        .request(Hello) { msg => s"$msg, World!" }
+  test("ping pong should work correctly") {
+    val services = Services
+      .empty[IO](Logger.root)
+      .request(Hello) { msg => s"$msg, World!" }
 
-      val pongBack: RpcClient[IO] => Services[IO] = { client => services }
+    val pongBack: RpcClient[IO] => Services[IO] = { _ => services }
 
-      TestConnection(pongBack, pongBack)
-        .use { conn =>
-          for {
-            response <- {
-              val headers = Map("Custom-Header" -> "Custom-Value")
-              conn.alice.client.request(Hello, "Hello", headers)
-            }
-          } yield {
-            response match {
-              case RpcSuccess(helloWorld, msg) => helloWorld shouldBe "Hello, World!"
-              case RpcFailure(methodName, error) => fail(s"Request failed: $methodName - $error")
-            }
+    TestConnection(pongBack, pongBack)
+      .use { conn =>
+        for {
+          response <- {
+            val headers = Map("Custom-Header" -> "Custom-Value")
+            conn.alice.client.request(Hello, "Hello", headers)
+          }
+        } yield {
+          response match {
+            case RpcSuccess(helloWorld, _) =>
+              expect(helloWorld == "Hello, World!")
+            case RpcFailure(methodName, error) =>
+              failure(s"Request failed: $methodName - $error")
           }
         }
-        .unsafeToFuture()
-    }
+      }
   }
 }

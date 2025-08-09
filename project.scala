@@ -10,8 +10,7 @@
 //> using compileOnly.dep "com.github.plokhotnyuk.jsoniter-scala::jsoniter-scala-macros:2.13.5"
 
 //> using test.dep "com.outr::scribe-file:3.5.5"
-//> using test.dep "org.typelevel::cats-effect-testing-scalatest:1.5.0"
-//> using test.dep "org.scalatest::scalatest:3.2.18"
+//> using test.dep "com.disneystreaming::weaver-cats:0.8.4"
 //> using test.dep "com.lihaoyi::pprint:0.6.6"
 
 //> using publish.organization "io.github.alexarchambault.bleep"
