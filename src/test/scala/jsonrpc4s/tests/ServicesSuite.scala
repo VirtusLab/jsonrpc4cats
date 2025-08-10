@@ -1,10 +1,10 @@
-package jsonrpc4s.tests
+package jsonrpc4cats.tests
 
 import cats.effect.IO
 import weaver._
 import scribe.Logger
-import jsonrpc4s.Endpoint
-import jsonrpc4s.Services
+import jsonrpc4cats.Endpoint
+import jsonrpc4cats.Services
 import com.github.plokhotnyuk.jsoniter_scala.core.JsonValueCodec
 import com.github.plokhotnyuk.jsoniter_scala.macros.JsonCodecMaker
 import com.github.plokhotnyuk.jsoniter_scala.macros.CodecMakerConfig

@@ -1,19 +1,19 @@
-package jsonrpc4s.tests
+package jsonrpc4cats.tests
 
 import java.nio.ByteBuffer
 import weaver._
 import cats.effect.IO
 import fs2.Stream
 import scribe.Logger
-import jsonrpc4s.Request
-import jsonrpc4s.RawJson
-import jsonrpc4s.RequestId
-import jsonrpc4s.LowLevelMessage
-import jsonrpc4s.LowLevelMessageWriter
+import jsonrpc4cats.Request
+import jsonrpc4cats.RawJson
+import jsonrpc4cats.RequestId
+import jsonrpc4cats.LowLevelMessage
+import jsonrpc4cats.LowLevelMessageWriter
 import com.github.plokhotnyuk.jsoniter_scala.core.JsonValueCodec
 import com.github.plokhotnyuk.jsoniter_scala.macros.JsonCodecMaker
 import com.github.plokhotnyuk.jsoniter_scala.macros.CodecMakerConfig
-import jsonrpc4s.LowLevelMessageReader
+import jsonrpc4cats.LowLevelMessageReader
 
 object BaseProtocolMessageSuite extends SimpleIOSuite {
   implicit val stringCodec: JsonValueCodec[String] = JsonCodecMaker.make(CodecMakerConfig)

@@ -1,4 +1,4 @@
-package jsonrpc4s
+package jsonrpc4cats
 
 import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets

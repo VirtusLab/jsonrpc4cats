@@ -1,4 +1,4 @@
-package jsonrpc4s
+package jsonrpc4cats
 
 import java.io.OutputStream
 import cats.effect.{Async, Deferred, Ref, Resource}

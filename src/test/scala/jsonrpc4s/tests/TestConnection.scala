@@ -1,13 +1,13 @@
-package jsonrpc4s.testkit
+package jsonrpc4cats.testkit
 
 import java.io.PipedInputStream
 import java.io.PipedOutputStream
 import cats.effect.Resource
 import cats.syntax.all._
-import jsonrpc4s.Connection
-import jsonrpc4s.InputOutput
-import jsonrpc4s.RpcClient
-import jsonrpc4s.Services
+import jsonrpc4cats.Connection
+import jsonrpc4cats.InputOutput
+import jsonrpc4cats.RpcClient
+import jsonrpc4cats.Services
 
 /**
  * A bi-directional connection between two running JSON-RPC entities named Alice and Bob.

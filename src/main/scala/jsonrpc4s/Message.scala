@@ -1,4 +1,4 @@
-package jsonrpc4s
+package jsonrpc4cats
 
 import scribe.LoggerSupport
 import cats.effect.kernel.Async

@@ -1,4 +1,4 @@
-package jsonrpc4s
+package jsonrpc4cats
 
 import cats.effect.kernel.Async
 
@@ -16,7 +16,7 @@ sealed trait RpcResponse[+T]
  */
 final case class RpcSuccess[T](
     value: T,
-    underlying: jsonrpc4s.Response.Success
+    underlying: jsonrpc4cats.Response.Success
 ) extends RpcResponse[T]
 
 /**
@@ -27,7 +27,7 @@ final case class RpcSuccess[T](
  */
 final case class RpcFailure(
     methodName: String,
-    underlying: jsonrpc4s.Response.Error
+    underlying: jsonrpc4cats.Response.Error
 ) extends RuntimeException(RpcFailure.toMsg(methodName, underlying))
     with RpcResponse[Nothing]
 

@@ -1,4 +1,4 @@
-package jsonrpc4s.tests
+package jsonrpc4cats.tests
 
 import java.io.ByteArrayOutputStream
 import java.io.PrintStream

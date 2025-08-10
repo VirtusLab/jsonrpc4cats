@@ -18,7 +18,7 @@
 //> using test.dep "com.lihaoyi::pprint:0.9.3"
 
 //> using publish.organization "io.github.alexarchambault.bleep"
-//> using publish.name "jsonrpc4s"
+//> using publish.name "jsonrpc4cats"
 //> using publish.ci.computeVersion "git:tag"
 //> using publish.ci.repository "central-s01"
 //> using publish.ci.user "env:PUBLISH_USER"
@@ -27,6 +27,6 @@
 //> using publish.ci.secretKeyPassword "env:PUBLISH_SECRET_KEY_PASSWORD"
 //> using publish.ci.publicKey "env:PUBLISH_PUBLIC_KEY"
 //> using publish.license "Apache-2.0"
-//> using publish.url "https://github.com/alexarchambault/jsonrpc4s"
-//> using publish.versionControl "github:alexarchambault/jsonrpc4s"
+//> using publish.url "https://github.com/alexarchambault/jsonrpc4cats"
+//> using publish.versionControl "github:alexarchambault/jsonrpc4cats"
 //> using publish.developer "Jorge Vicente Cantero||https://jvican.github.io/"

@@ -1,4 +1,4 @@
-package jsonrpc4s
+package jsonrpc4cats
 
 import java.io.ByteArrayOutputStream
 import java.io.OutputStream

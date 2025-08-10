@@ -1,4 +1,4 @@
-package jsonrpc4s
+package jsonrpc4cats
 
 import com.github.plokhotnyuk.jsoniter_scala.core.JsonValueCodec
 import com.github.plokhotnyuk.jsoniter_scala.core.JsonReader

@@ -1,19 +1,19 @@
-package jsonrpc4s.tests
+package jsonrpc4cats.tests
 
 import weaver._
 import cats.effect.IO
 import cats.effect.{Deferred, Ref}
 import cats.effect.kernel.Outcome
 import scribe.Logger
-import jsonrpc4s.Endpoint
-import jsonrpc4s.Services
-import jsonrpc4s.RpcClient
-import jsonrpc4s.Service
-import jsonrpc4s.testkit.TestConnection
+import jsonrpc4cats.Endpoint
+import jsonrpc4cats.Services
+import jsonrpc4cats.RpcClient
+import jsonrpc4cats.Service
+import jsonrpc4cats.testkit.TestConnection
 import com.github.plokhotnyuk.jsoniter_scala.core.JsonValueCodec
 import com.github.plokhotnyuk.jsoniter_scala.macros.JsonCodecMaker
 import com.github.plokhotnyuk.jsoniter_scala.macros.CodecMakerConfig
-import jsonrpc4s.{RpcSuccess, RpcFailure, ErrorCode}
+import jsonrpc4cats.{RpcSuccess, RpcFailure, ErrorCode}
 
 object EndToEndSuite extends SimpleIOSuite {
 

@@ -1,4 +1,4 @@
-package jsonrpc4s
+package jsonrpc4cats
 
 import cats.effect.kernel.Async
 
