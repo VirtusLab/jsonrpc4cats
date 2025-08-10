@@ -33,7 +33,6 @@ class RpcServer[F[_]] protected (
               request.cancel *>
                 F.delay {
                   activeClientRequests.remove(id)
-                  Response.cancelled(id)
                 }.void
           }
         }
@@ -58,32 +57,31 @@ class RpcServer[F[_]] protected (
 
   protected def handleRequest(request: Request): F[Response] = {
     val Request(method, _, id, _, _) = request
-    F.delay(println(s"Handling request in server: $request")) *>
-      F.delay(handlersByMethodName.get(method)).flatMap {
-        case None =>
-          F.delay {
-            logger.info(s"Method not found '$method'")
-            Response.methodNotFound(method, id)
-          }
+    F.delay(handlersByMethodName.get(method)).flatMap {
+      case None =>
+        F.delay {
+          logger.info(s"Method not found '$method'")
+          Response.methodNotFound(method, id)
+        }
 
-        case Some(handler) =>
-          val response = handler.handle(request).handleErrorWith {
-            case NonFatal(e) =>
-              F.delay {
-                logger.error(s"Unhandled JSON-RPC error handling request $request", e)
-                Response.internalError(e.getMessage, request.id)
-              }
-          }
-          for {
-            fiber <- Async[F].start(response)
-            _ <- F.delay(activeClientRequests.put(request.id, fiber))
-            result <- fiber.join.flatMap {
-              case Outcome.Succeeded(fa) => fa
-              case Outcome.Errored(e) => F.raiseError(e)
-              case Outcome.Canceled() => F.raiseError(new RuntimeException("Request was canceled"))
-            }: F[Response]
-          } yield result
-      }
+      case Some(handler) =>
+        val response = handler.handle(request).handleErrorWith {
+          case NonFatal(e) =>
+            F.delay {
+              logger.error(s"Unhandled JSON-RPC error handling request $request", e)
+              Response.internalError(e.getMessage, request.id)
+            }
+        }
+        for {
+          fiber <- Async[F].start(response)
+          _ <- F.delay(activeClientRequests.put(request.id, fiber))
+          result <- fiber.join.flatMap {
+            case Outcome.Succeeded(fa) => fa
+            case Outcome.Errored(e) => F.raiseError(e)
+            case Outcome.Canceled() => F.pure(Response.cancelled(id))
+          }: F[Response]
+        } yield result
+    }
   }
 
   protected def handleNotification(notification: Notification): F[Response] = {
@@ -125,23 +123,19 @@ class RpcServer[F[_]] protected (
   }
 
   def startTask: F[Unit] = {
-    F.onCancel(
-      in.evalMap { msg =>
-          handleValidMessage(msg)
-            .flatTap(response => F.delay(println(s"RpcServer responding $response to client")))
-            .flatMap {
-              case Response.None => F.unit
-              case response => client.serverRespond(response)
-            }
-            .handleErrorWith {
-              case NonFatal(e) =>
-                F.delay(logger.error("Unhandled error responding to JSON-RPC client", e))
-            }
-        }
-        .compile
-        .drain,
-      F.delay(println("RpcServer.startTask cancelled"))
-    )
+    in.parEvalMapUnordered(32) { msg => // TODO make server parallelism configurable
+        handleValidMessage(msg)
+          .flatMap {
+            case Response.None => F.unit
+            case response => client.serverRespond(response)
+          }
+          .handleErrorWith {
+            case NonFatal(e) =>
+              F.delay(logger.error("Unhandled error responding to JSON-RPC client", e))
+          }
+      }
+      .compile
+      .drain
   }
 }
 
@@ -151,7 +145,5 @@ object RpcServer {
       client: RpcClient[F],
       services: Services[F],
       logger: LoggerSupport
-  ): RpcServer[F] = {
-    new RpcServer(in, client, services, logger)
-  }
+  ): RpcServer[F] = new RpcServer(in, client, services, logger)
 }

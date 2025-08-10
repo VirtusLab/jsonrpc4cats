@@ -105,72 +105,32 @@ object LowLevelMessageReader {
   }
 
   def streamReader[F[_]: Async](
-      logger: LoggerSupport,
-      name: String
+      logger: LoggerSupport
   ): Pipe[F, ByteBuffer, LowLevelMessage] = { in =>
     val data = ArrayBuffer.empty[Byte]
     val reader = new LowLevelMessageReader(logger)
 
     def drainAvailable: Pull[F, LowLevelMessage, Unit] = {
-      Pull.eval(
-        Async[F].delay(
-          println(
-            s"[$name] [drain] start: contentLength=${reader.currentContentLength}, bufferSize=${data.size}"
-          )
-        )
-      ) >> {
-        val result =
-          if (reader.currentContentLength < 0) reader.readHeaders(data)
-          else reader.readContent(data)
-        Pull.eval(
-          Async[F].delay(
-            println(
-              s"[$name] [drain] read result: msgDefined=${result.msg.isDefined}, complete=${result.complete}, newBufferSize=${data.size}, nextContentLength=${reader.currentContentLength}"
-            )
-          )
-        ) >>
-          (result.msg match {
-            case Some(msg) =>
-              Pull.eval(
-                Async[F].delay(
-                  println(
-                    s"[$name] [drain] emitting message: headers=${msg.header}, contentBytes=${msg.content.length}"
-                  )
-                )
-              ) >>
-                Pull.output1(msg) >> drainAvailable
-            case None =>
-              Pull.eval(Async[F].delay(println(s"[$name] [drain] no complete message available"))) >> Pull.done
-          })
+      val result =
+        if (reader.currentContentLength < 0) reader.readHeaders(data)
+        else reader.readContent(data)
+
+      result.msg match {
+        case Some(msg) =>
+          Pull.output1(msg) >> drainAvailable
+        case None =>
+          Pull.done
       }
     }
 
     def loop(s: Stream[F, ByteBuffer]): Pull[F, LowLevelMessage, Unit] =
       s.pull.uncons1.flatMap {
         case None =>
-          Pull.eval(
-            Async[F].delay(
-              println(s"[$name] [loop] upstream completed, finalBufferSize=${data.size}")
-            )
-          ) >>
-            drainAvailable >> Pull.done
+          drainAvailable >> Pull.done
         case Some((buf, tail)) =>
           val array = new Array[Byte](buf.remaining())
           buf.get(array)
-          val preview = new String(array, 0, math.min(array.length, 128), StandardCharsets.UTF_8)
-          val beforeSize = data.size
-          Pull.eval(
-            Async[F].delay(
-              println(
-                s"[$name] [loop] received chunk: bytes=${array.length}, preview='" + preview
-                  .replaceAll("\n", "\\n") + "'"
-              )
-            )
-          ) >>
-            Pull.eval(Async[F].delay(println(s"[$name] [loop] buffer before append: $beforeSize"))) >>
-            Pull.eval(Async[F].delay(data ++= array)) >>
-            Pull.eval(Async[F].delay(println(s"[$name] [loop] buffer after append: ${data.size}"))) >>
-            drainAvailable >> loop(tail)
+          Pull.eval(Async[F].delay(data ++= array)) >> drainAvailable >> loop(tail)
       }
 
     loop(in).stream

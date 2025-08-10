@@ -34,17 +34,15 @@ final class LowLevelMessage(
 }
 
 object LowLevelMessage {
+
   object io {
+    import fs2.Chunk
     import cats.effect._
     import cats.syntax.all._
-    import fs2.Chunk
 
     private def readBytesFromInputStream[F[_]](is: InputStream, buf: Array[Byte], offset: Int)(
         read: (InputStream, Array[Byte], Int) => F[Int]
-    )(
-        implicit
-        F: Sync[F]
-    ): F[Option[(Chunk[Byte], Option[(Array[Byte], Int)])]] =
+    )(implicit F: Sync[F]): F[Option[(Chunk[Byte], Option[(Array[Byte], Int)])]] =
       read(is, buf, offset).map { numBytes =>
         if (numBytes < 0) None
         else if (offset + numBytes == buf.size) Some(Chunk.array(buf, offset, numBytes) -> None)
@@ -59,10 +57,12 @@ object LowLevelMessage {
       val read = (is: InputStream, buf: Array[Byte], off: Int) =>
         F.interruptible(is.read(buf, off, buf.length - off))
 
-      def useIs(is: InputStream) = Stream.unfoldChunkEval(Option.empty[(Array[Byte], Int)]) {
-        case None => buf.flatMap(b => readBytesFromInputStream(is, b, 0)(read))
-        case Some((b, offset)) => readBytesFromInputStream(is, b, offset)(read)
-      }
+      def useIs(is: InputStream) =
+        Stream
+          .unfoldChunkEval(Option.empty[(Array[Byte], Int)]) {
+            case None => buf.flatMap(b => readBytesFromInputStream(is, b, 0)(read))
+            case Some((b, offset)) => readBytesFromInputStream(is, b, offset)(read)
+          }
 
       Stream.bracket(fis)(is => Sync[F].blocking(is.close())).flatMap(useIs)
     }
@@ -81,39 +81,33 @@ object LowLevelMessage {
 
   def fromInputStream[F[_]: Async](
       in: InputStream,
-      logger: LoggerSupport,
-      name: String
+      logger: LoggerSupport
   ): Stream[F, LowLevelMessage] = {
     // FIXME: Use bracket to handle this resource correctly if something fails
     fromByteBuffers(
       io.readInputStream[F](Async[F].pure(in), 4096)
         .chunks
-        .map(_.toByteBuffer)
-        .onFinalize(Async[F].delay(println(s"input stream closed for $name"))),
-      logger,
-      name
-    ).onFinalize(Async[F].delay(println(s"fromByteBuffers closed for $name")))
+        .map(_.toByteBuffer),
+      logger
+    )
   }
 
   def fromBytes[F[_]: Async](
       in: Stream[F, Array[Byte]],
       logger: LoggerSupport
   ): Stream[F, LowLevelMessage] = {
-    fromByteBuffers(in.map(ByteBuffer.wrap), logger, "chuj")
+    fromByteBuffers(in.map(ByteBuffer.wrap), logger)
   }
 
   def fromByteBuffers[F[_]: Async](
       in: Stream[F, ByteBuffer],
-      logger: LoggerSupport,
-      name: String
+      logger: LoggerSupport
   ): Stream[F, LowLevelMessage] = {
-    in.through(LowLevelMessageReader.streamReader(logger, name))
-      .evalTap(msg => Async[F].delay(println(s"Received after LowLevelMessageReader: $msg")))
+    in.through(LowLevelMessageReader.streamReader(logger))
   }
 
   def toMsg(message: LowLevelMessage): Message = {
     import com.github.plokhotnyuk.jsoniter_scala.core.readFromArray
-    println(s"Content:\n'${new String(message.content, StandardCharsets.UTF_8)}'\n")
     // Make sure we propagate headers from the transport to the read message before handling
     Try(readFromArray[Message](message.content)) match {
       case Success(msg: Request) => msg.copy(headers = message.header)

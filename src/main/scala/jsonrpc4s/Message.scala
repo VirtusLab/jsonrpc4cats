@@ -156,17 +156,7 @@ object Message {
               case Right(channel) => channel
             }
             val writer = new LowLevelChannelMessageWriter(channel, logger)
-            Async[F].delay {
-              try {
-                println(s"Writing message $msg to OutputStream")
-                writer.write(msg)
-              } catch {
-                case err: java.io.IOException =>
-                  logger.trace(s"Found error when writing ${msg}, closing channel!", err)
-                  channel.close()
-                  throw err
-              }
-            }.flatten *> Async[F].delay(println(s"Message written to OutputStream"))
+            writer.write(msg)
           }
           .compile
           .drain
@@ -184,15 +174,7 @@ object Message {
         channel.stream
           .evalMap { msg =>
             val writer = new LowLevelByteBufferMessageWriter(out, logger)
-            Async[F].delay {
-              try {
-                writer.write(msg)
-              } catch {
-                case err: java.io.IOException =>
-                  logger.trace(s"Found error when writing ${msg}, closing channel!", err)
-                  throw err
-              }
-            }
+            writer.write(msg)
           }
           .compile
           .drain

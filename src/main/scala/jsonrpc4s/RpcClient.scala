@@ -1,7 +1,7 @@
 package jsonrpc4s
 
 import java.io.OutputStream
-import cats.effect.{Async, Deferred, Ref}
+import cats.effect.{Async, Deferred, Ref, Resource}
 import cats.syntax.all._
 import fs2.concurrent.Channel
 import scala.collection.concurrent.TrieMap
@@ -22,11 +22,9 @@ class RpcClient[F[_]](
   protected val counter: Ref[F, Int] = Ref.unsafe[F, Int](1)
   protected val activeServerRequests = TrieMap.empty[RequestId, Deferred[F, Response]]
 
-  protected val notificationsLock = new Object()
   protected def toJson[R: JsonValueCodec](r: R): RawJson = RawJson(writeToArray(r))
 
   def serverRespond(response: Response): F[Unit] = {
-    println(s"RpcClient responding to $response from server")
     response match {
       case Response.None => F.unit
       case x: Response.Success => channel.send(x).void
@@ -36,10 +34,13 @@ class RpcClient[F[_]](
 
   def clientRespond(response: Response): F[Unit] = {
     for {
-      _ <- F.delay(println(s"RpcClient responding to $response from server"))
       id <- F.delay(response match {
         case Response.None => None
         case Response.Success(_, requestId, _, _) => Some(requestId)
+        // we get a Response.Error if the request is cancelled
+        // but since it's us who cancelled the request, the callback
+        // is already gone, so we can just ignore it
+        case err: Response.Error if err.isCancelled => None
         case Response.Error(_, requestId, _, _) => Some(requestId)
       })
       _ <- id match {
@@ -63,14 +64,7 @@ class RpcClient[F[_]](
     import endpoint.codecA
     val msg = Notification(endpoint.method, Some(toJson(params)), headers)
 
-    // Send notifications in the order they are sent by the caller
-    F.delay {
-        notificationsLock.synchronized {
-          channel.send(msg)
-        }
-      }
-      .flatten
-      .void
+    channel.send(msg).void
   }
 
   def request[A, B](
@@ -81,18 +75,10 @@ class RpcClient[F[_]](
     import endpoint.{codecA, codecB}
     for {
       reqId <- counter.updateAndGet(_ + 1).map(RequestId.apply)
-      _ <- F.delay(println(s"Requesting $endpoint with params $params, reqId $reqId"))
-      resEff: F[RpcResponse[B]] @unchecked = for {
+      fireRequest: F[RpcResponse[B]] @unchecked = for {
         deferred <- Deferred[F, Response]
         _ <- F.delay(activeServerRequests.put(reqId, deferred))
-        _ <- F
-          .delay {
-            val json = Request(endpoint.method, Some(toJson(params)), reqId, headers)
-            channel.send(json) *> F.delay(println(s"Sent request $json"))
-          }
-          .flatten
-          .void
-        _ <- F.delay(println(s"Request sent, waiting for response"))
+        _ <- channel.send(Request(endpoint.method, Some(toJson(params)), reqId, headers)).void
         response <- deferred.get
         result <- response match {
           // This case can never happen given that no response isn't a valid JSON-RPC message
@@ -112,6 +98,9 @@ class RpcClient[F[_]](
           // This shit is equivalent to throwing an exception containing an Integer from a method returning an Integer!
           // But we have to respect the contract because stuff has been built on this hot garbage,
           // so now we have to behave the same way.
+          //
+          // it's actually not doing anything with CE3 because the carrier fiber must have been
+          // cancelled already but for parity - we raise an exception
           case err: Response.Error if err.isCancelled =>
             F.raiseError(RpcFailure(endpoint.method, err))
           case err: Response.Error => F.pure(RpcFailure(endpoint.method, err))
@@ -124,59 +113,59 @@ class RpcClient[F[_]](
         }
       } yield result
       result <- F.onCancel(
-        resEff,
+        fireRequest,
         F.delay {
-          activeServerRequests.remove(reqId).foreach { deferred =>
-            deferred.complete(Response.cancelled(reqId)) *>
-              notify(RpcActions.cancelRequest, CancelParams(reqId))
+          activeServerRequests.remove(reqId) match {
+            case Some(deferred) =>
+              deferred.complete(Response.cancelled(reqId)) *>
+                notify(RpcActions.cancelRequest, CancelParams(reqId))
+            case None =>
+              F.unit
           }
-        }
+        }.flatten
       )
     } yield result
   }
 }
 
 object RpcClient {
+
+  def apply[F[_]: Async](
+      channel: Channel[F, Message],
+      logger: LoggerSupport
+  ): F[RpcClient[F]] = Async[F].delay(new RpcClient[F](channel, logger))
+
   def fromOutputStream[F[_]: Async](
       out: OutputStream,
       logger: LoggerSupport
-  ): F[RpcClient[F]] = {
+  ): Resource[F, RpcClient[F]] = {
     for {
-      channel <- Channel.unbounded[F, Message]
-      outputChannel <- Message.messagesToOutput(Left(out), logger)
-      _ <- Async[F].start {
+      channel <- Resource.eval(Channel.unbounded[F, Message])
+      outputChannel <- Resource.eval(Message.messagesToOutput(Left(out), logger))
+      writerFiber <- Resource.eval(Async[F].start {
         channel.stream
-          .evalMap { msg =>
-            Async[F].delay(println(s"Sending message $msg to output channel")) *>
-              outputChannel.send(msg).flatMap {
-                case Left(_) => Async[F].unit
-                case Right(_) => Async[F].unit
-              }
-          }
+          .evalMap { msg => outputChannel.send(msg).void }
           .compile
           .drain
-      }
-    } yield new RpcClient[F](channel, logger)
+      })
+      rpcClient <- Resource.make(RpcClient(channel, logger))(_ => writerFiber.cancel)
+    } yield rpcClient
   }
 
   def fromChannel[F[_]: Async](
       channel: WritableByteChannel,
       logger: LoggerSupport
-  ): F[RpcClient[F]] = {
+  ): Resource[F, RpcClient[F]] = {
     for {
-      msgChannel <- Channel.unbounded[F, Message]
-      outputChannel <- Message.messagesToOutput(Right(channel), logger)
-      _ <- Async[F].start {
+      msgChannel <- Resource.eval(Channel.unbounded[F, Message])
+      outputChannel <- Resource.eval(Message.messagesToOutput(Right(channel), logger))
+      writerFiber <- Resource.eval(Async[F].start {
         msgChannel.stream
-          .evalMap { msg =>
-            outputChannel.send(msg).flatMap {
-              case Left(_) => Async[F].unit
-              case Right(_) => Async[F].unit
-            }
-          }
+          .evalMap { msg => outputChannel.send(msg).void }
           .compile
           .drain
-      }
-    } yield new RpcClient[F](msgChannel, logger)
+      })
+      rpcClient <- Resource.make(RpcClient(msgChannel, logger))(_ => writerFiber.cancel)
+    } yield rpcClient
   }
 }

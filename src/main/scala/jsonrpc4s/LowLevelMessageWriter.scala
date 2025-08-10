@@ -50,8 +50,6 @@ final class LowLevelChannelMessageWriter[F[_]: Async](
            |  --> content: ${new String(protocolMsg.content, StandardCharsets.UTF_8)}
          """.stripMargin
       )
-      println(s"Writing message to buffer: ${protocolMsg.header.mkString(", ")}")
-      println(s"Content: ${new String(protocolMsg.content, StandardCharsets.UTF_8)}")
 
       val buf = baos.synchronized {
         baos.reset()
