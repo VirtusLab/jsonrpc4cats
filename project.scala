@@ -6,7 +6,6 @@
 
 //> using dep "org.typelevel::cats-effect:3.6.3"
 //> using dep "co.fs2::fs2-core:3.12.0"
-// > using dep "co.fs2::fs2-io:3.12.0"
 //> using dep "com.outr::scribe:3.5.5"
 // > using dep "com.outr::scribe-cats:3.15.2"
 
@@ -17,7 +16,7 @@
 //> using test.dep "com.disneystreaming::weaver-cats:0.8.4"
 //> using test.dep "com.lihaoyi::pprint:0.9.3"
 
-//> using publish.organization "io.github.alexarchambault.bleep"
+//> using publish.organization "org.virtuslab"
 //> using publish.name "jsonrpc4cats"
 //> using publish.ci.computeVersion "git:tag"
 //> using publish.ci.repository "central-s01"
@@ -27,6 +26,8 @@
 //> using publish.ci.secretKeyPassword "env:PUBLISH_SECRET_KEY_PASSWORD"
 //> using publish.ci.publicKey "env:PUBLISH_PUBLIC_KEY"
 //> using publish.license "Apache-2.0"
-//> using publish.url "https://github.com/alexarchambault/jsonrpc4cats"
-//> using publish.versionControl "github:alexarchambault/jsonrpc4cats"
+//> using publish.url "https://github.com/virtuslab/jsonrpc4cats"
+//> using publish.versionControl "github:virtuslab/jsonrpc4cats"
 //> using publish.developer "Jorge Vicente Cantero||https://jvican.github.io/"
+//> using publish.developer "Alexandre Archambault||https://github.com/alexarchambault"
+//> using publish.developer "Łukasz Biały||https://github.com/lbialy"
