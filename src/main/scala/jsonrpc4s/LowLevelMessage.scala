@@ -81,7 +81,7 @@ object LowLevelMessage {
 
   def fromInputStream[F[_]: Async](
       in: InputStream,
-      logger: LoggerSupport
+      logger: LoggerSupport[Unit]
   ): Stream[F, LowLevelMessage] = {
     // FIXME: Use bracket to handle this resource correctly if something fails
     fromByteBuffers(
@@ -94,14 +94,14 @@ object LowLevelMessage {
 
   def fromBytes[F[_]: Async](
       in: Stream[F, Array[Byte]],
-      logger: LoggerSupport
+      logger: LoggerSupport[Unit]
   ): Stream[F, LowLevelMessage] = {
     fromByteBuffers(in.map(ByteBuffer.wrap), logger)
   }
 
   def fromByteBuffers[F[_]: Async](
       in: Stream[F, ByteBuffer],
-      logger: LoggerSupport
+      logger: LoggerSupport[Unit]
   ): Stream[F, LowLevelMessage] = {
     in.through(LowLevelMessageReader.streamReader(logger))
   }

@@ -6,14 +6,16 @@ import fs2.Stream
 import scala.collection.concurrent.TrieMap
 import scala.util.control.NonFatal
 import scribe.LoggerSupport
+import scribe.Scribe
+import scribe.cats.effect
 import cats.syntax.all._
 
 class RpcServer[F[_]] protected (
     in: Stream[F, Message],
     client: RpcClient[F],
     services: Services[F],
-    logger: LoggerSupport
-)(implicit F: Async[F]) {
+    logger: LoggerSupport[Unit]
+)(implicit F: Async[F], S: Scribe[F]) {
   protected val activeClientRequests: TrieMap[RequestId, Fiber[F, Throwable, Response]] =
     TrieMap.empty
   protected val cancelNotification = {
@@ -23,14 +25,10 @@ class RpcServer[F[_]] protected (
           val id = params.id
           F.delay(activeClientRequests.get(id)).flatMap {
             case None =>
-              F.delay {
-                logger.warn(
-                  s"Can't cancel request $id, no active request found."
-                )
-              }
+              S.warn(s"Can't cancel request $id, no active request found.")
             case Some(request) =>
-              logger.info(s"Cancelling request $id")
-              request.cancel *>
+              S.info(s"Cancelling request $id") *>
+                request.cancel *>
                 F.delay {
                   activeClientRequests.remove(id)
                 }.void
@@ -88,28 +86,22 @@ class RpcServer[F[_]] protected (
     val Notification(method, _, _, _) = notification
     F.delay(handlersByMethodName.get(method)).flatMap {
       case None =>
-        F.delay {
-          // Can't respond to invalid notifications
-          logger.error(s"Unknown method '$method'")
-          Response.None
-        }
+        // Can't respond to invalid notifications
+        S.error(s"Unknown method '$method'").as(Response.None)
 
       case Some(handler) =>
         val response = handler
           .handle(notification)
           .handleErrorWith {
             case NonFatal(e) =>
-              F.delay {
-                logger.error(s"Error handling notification $notification", e)
-                Response.None
-              }
+              S.error(s"Error handling notification $notification: ${e}").as(Response.None)
           }
 
-        response.map {
-          case Response.None => Response.None
+        response.flatMap {
+          case Response.None => F.pure(Response.None)
           case nonEmpty =>
-            logger.error(s"Obtained non-empty response $nonEmpty for notification $notification!")
-            Response.None
+            S.error(s"Obtained non-empty response $nonEmpty for notification $notification!") *> F
+              .pure(Response.None)
         }
     }
   }
@@ -144,6 +136,6 @@ object RpcServer {
       in: Stream[F, Message],
       client: RpcClient[F],
       services: Services[F],
-      logger: LoggerSupport
+      logger: LoggerSupport[Unit]
   ): RpcServer[F] = new RpcServer(in, client, services, logger)
 }

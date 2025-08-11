@@ -50,7 +50,7 @@ object Service {
 
   def notification[F[_]: Async, A](
       endpoint: Endpoint[A, Unit],
-      logger: LoggerSupport
+      logger: LoggerSupport[Unit]
   )(
       f: Service[F, A, Unit]
   ): NamedJsonRpcService[F] = {
@@ -81,12 +81,12 @@ object Service {
 }
 
 object Services {
-  def empty[F[_]](logger: LoggerSupport): Services[F] = new Services(Nil, logger)
+  def empty[F[_]](logger: LoggerSupport[Unit]): Services[F] = new Services(Nil, logger)
 }
 
 class Services[F[_]] private (
     val services: List[NamedJsonRpcService[F]],
-    logger: LoggerSupport
+    logger: LoggerSupport[Unit]
 ) {
   def request[A, B](endpoint: Endpoint[A, B])(f: A => B)(implicit F: Async[F]): Services[F] = {
     requestAsync[A, B](endpoint)(new Service[F, A, B] {

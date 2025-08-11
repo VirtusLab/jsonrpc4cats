@@ -144,7 +144,7 @@ object Message {
    */
   def messagesToOutput[F[_]: Async](
       out: Either[OutputStream, WritableByteChannel],
-      logger: LoggerSupport
+      logger: LoggerSupport[Unit]
   ): F[Channel[F, Message]] = {
     for {
       sink <- Channel.unbounded[F, Message]
@@ -166,7 +166,7 @@ object Message {
 
   def messagesToByteBuffer[F[_]: Async](
       out: Channel[F, ByteBuffer],
-      logger: LoggerSupport
+      logger: LoggerSupport[Unit]
   ): F[Channel[F, Message]] = {
     for {
       channel <- Channel.unbounded[F, Message]

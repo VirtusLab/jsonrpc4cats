@@ -7,7 +7,7 @@ import fs2.{Pipe, Pull, Stream}
 import cats.effect.kernel.Async
 import scribe.LoggerSupport
 
-final class LowLevelMessageReader(logger: LoggerSupport) {
+final class LowLevelMessageReader(logger: LoggerSupport[Unit]) {
   // TODO: Benchmark and consider `Queue[ByteBuffer]` over `ArrayBuffer[Byte]`
 
   private[this] val EmptyPair = "" -> ""
@@ -90,7 +90,7 @@ final class LowLevelMessageReader(logger: LoggerSupport) {
 }
 
 object LowLevelMessageReader {
-  def read(buf: ByteBuffer, logger: LoggerSupport): Option[LowLevelMessage] = {
+  def read(buf: ByteBuffer, logger: LoggerSupport[Unit]): Option[LowLevelMessage] = {
     val data = ArrayBuffer.empty[Byte]
     val array = new Array[Byte](buf.remaining())
     buf.get(array)
@@ -105,7 +105,7 @@ object LowLevelMessageReader {
   }
 
   def streamReader[F[_]: Async](
-      logger: LoggerSupport
+      logger: LoggerSupport[Unit]
   ): Pipe[F, ByteBuffer, LowLevelMessage] = { in =>
     val data = ArrayBuffer.empty[Byte]
     val reader = new LowLevelMessageReader(logger)

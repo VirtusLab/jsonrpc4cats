@@ -6,13 +6,13 @@
 
 //> using dep "org.typelevel::cats-effect:3.6.3"
 //> using dep "co.fs2::fs2-core:3.12.0"
-//> using dep "com.outr::scribe:3.5.5"
-// > using dep "com.outr::scribe-cats:3.15.2"
+//> using dep "com.outr::scribe:3.15.2"
+//> using dep "com.outr::scribe-cats:3.15.2"
 
 //> using dep "com.github.plokhotnyuk.jsoniter-scala::jsoniter-scala-core:2.13.5"
 //> using compileOnly.dep "com.github.plokhotnyuk.jsoniter-scala::jsoniter-scala-macros:2.13.5"
 
-//> using test.dep "com.outr::scribe-file:3.5.5"
+//> using test.dep "com.outr::scribe-file:3.15.2"
 //> using test.dep "com.disneystreaming::weaver-cats:0.8.4"
 //> using test.dep "com.lihaoyi::pprint:0.9.3"
 

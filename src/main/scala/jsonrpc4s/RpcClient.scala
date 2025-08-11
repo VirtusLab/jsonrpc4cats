@@ -15,7 +15,7 @@ import java.nio.channels.WritableByteChannel
 
 class RpcClient[F[_]](
     channel: Channel[F, Message],
-    logger: LoggerSupport
+    logger: LoggerSupport[Unit]
 )(implicit F: Async[F])
     extends RpcActions[F] {
 
@@ -132,12 +132,12 @@ object RpcClient {
 
   def apply[F[_]: Async](
       channel: Channel[F, Message],
-      logger: LoggerSupport
+      logger: LoggerSupport[Unit]
   ): F[RpcClient[F]] = Async[F].delay(new RpcClient[F](channel, logger))
 
   def fromOutputStream[F[_]: Async](
       out: OutputStream,
-      logger: LoggerSupport
+      logger: LoggerSupport[Unit]
   ): Resource[F, RpcClient[F]] = {
     for {
       channel <- Resource.eval(Channel.unbounded[F, Message])
@@ -154,7 +154,7 @@ object RpcClient {
 
   def fromChannel[F[_]: Async](
       channel: WritableByteChannel,
-      logger: LoggerSupport
+      logger: LoggerSupport[Unit]
   ): Resource[F, RpcClient[F]] = {
     for {
       msgChannel <- Resource.eval(Channel.unbounded[F, Message])

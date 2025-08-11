@@ -39,11 +39,12 @@ sealed trait LowLevelMessageWriter {
  */
 final class LowLevelChannelMessageWriter[F[_]: Async](
     channel: WritableByteChannel,
-    logger: LoggerSupport
+    logger: LoggerSupport[Unit]
 ) extends LowLevelMessageWriter {
   def write(msg: Message): F[Unit] = {
-    val protocolMsg = LowLevelMessage.fromMsg(msg)
-    Async[F].delay {
+    Async[F].blocking {
+      val protocolMsg = LowLevelMessage.fromMsg(msg)
+
       logger.trace(
         s"""
            |  --> header: ${protocolMsg.header.mkString(", ")}
@@ -70,7 +71,7 @@ final class LowLevelChannelMessageWriter[F[_]: Async](
  */
 final class LowLevelByteBufferMessageWriter[F[_]: Async](
     out: Channel[F, ByteBuffer],
-    logger: LoggerSupport
+    logger: LoggerSupport[Unit]
 ) extends LowLevelMessageWriter {
   def write(msg: Message): F[Unit] = {
     val protocolMsg = LowLevelMessage.fromMsg(msg)

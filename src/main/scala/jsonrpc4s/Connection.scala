@@ -4,7 +4,6 @@ import cats.effect.{Async, Resource}
 import cats.effect.kernel.Fiber
 import scribe.Logger
 import scribe.LoggerSupport
-// import cats.syntax.all._
 
 /**
  * A connection with another JSON-RPC entity.
@@ -28,8 +27,8 @@ object Connection {
 
   def apply[F[_]: Async](
       io: InputOutput[F],
-      serverLogger: LoggerSupport,
-      clientLogger: LoggerSupport
+      serverLogger: LoggerSupport[Unit],
+      clientLogger: LoggerSupport[Unit]
   )(
       f: RpcClient[F] => Services[F]
   ): Resource[F, Connection[F]] =
